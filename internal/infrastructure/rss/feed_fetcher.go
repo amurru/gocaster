@@ -32,7 +32,7 @@ func (f *FeedFetcher) Parse(url string) (*domain.Podcast, []domain.Episode, erro
 		FeedURL:     url,
 		Description: feed.Description,
 	}
-	
+
 	episodes := make([]domain.Episode, 0, len(feed.Items))
 	for _, item := range feed.Items {
 		// Skip items without audio

@@ -13,6 +13,7 @@ type keyMap struct {
 	NextEpisode    key.Binding
 	PrevEpisode    key.Binding
 	RefreshPodcast key.Binding
+	Filter         key.Binding
 }
 
 func defaultKeyMap() keyMap {
@@ -57,16 +58,20 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("r"),
 			key.WithHelp("r", "refresh feed"),
 		),
+		Filter: key.NewBinding(
+			key.WithKeys("/"),
+			key.WithHelp("/", "filter list"),
+		),
 	}
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Add, k.RefreshPodcast, k.SwitchPane, k.PlayEpisode, k.NextEpisode, k.PrevEpisode, k.Close, k.ToggleHelp, k.Quit}
+	return []key.Binding{k.Add, k.RefreshPodcast, k.SwitchPane, k.PlayEpisode, k.NextEpisode, k.PrevEpisode, k.Filter, k.Close, k.ToggleHelp, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Add, k.RefreshPodcast, k.SwitchPane, k.PlayEpisode, k.NextEpisode, k.PrevEpisode},
+		{k.Add, k.RefreshPodcast, k.SwitchPane, k.PlayEpisode, k.NextEpisode, k.PrevEpisode, k.Filter},
 		{k.Submit, k.Close},
 		{k.ToggleHelp, k.Quit},
 	}

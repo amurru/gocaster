@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/amurru/gocaster/internal/application"
@@ -271,5 +272,62 @@ func TestModelRefreshKeyTriggersRefreshCommand(t *testing.T) {
 
 	if current.status != "Added 3 new episodes" {
 		t.Fatalf("expected status 'Added 3 new episodes', got %q", current.status)
+	}
+}
+
+func TestModelEpisodeFilterWithSlashInDetailPane(t *testing.T) {
+	model := newTestModel(t)
+	podcast := domain.Podcast{
+		ID:      7,
+		Title:   "Syntax",
+		FeedURL: "https://example.com/feed.xml",
+	}
+	episodes := []domain.Episode{
+		{ID: 1, PodcastID: podcast.ID, Title: "Episode One - Introduction"},
+		{ID: 2, PodcastID: podcast.ID, Title: "Episode Two - Advanced Topics"},
+		{ID: 3, PodcastID: podcast.ID, Title: "Episode Three - Deep Dive"},
+	}
+
+	updated, _ := model.Update(podcastsLoadedMsg{podcasts: []domain.Podcast{podcast}})
+	_, _ = model.Update(episodesLoadedMsg{podcastID: podcast.ID, episodes: episodes})
+	current := updated.(Model)
+
+	current.focus = focusDetail
+	current.epList.SetFilterState(list.Filtering)
+
+	updated, cmd := current.Update(keyMsg("/", '/'))
+	current = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected filter command when pressing / in detail focus")
+	}
+
+	if !current.epList.SettingFilter() {
+		t.Fatal("expected episode list to be in filter mode after pressing /")
+	}
+}
+
+func TestModelPodcastListFilterWithSlash(t *testing.T) {
+	model := newTestModel(t)
+	podcast := domain.Podcast{
+		ID:      7,
+		Title:   "Syntax",
+		FeedURL: "https://example.com/feed.xml",
+	}
+
+	updated, _ := model.Update(podcastsLoadedMsg{podcasts: []domain.Podcast{podcast}})
+	current := updated.(Model)
+
+	current.focus = focusLibrary
+
+	updated, cmd := current.Update(keyMsg("/", '/'))
+	current = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected filter command when pressing / in library focus")
+	}
+
+	if !current.list.SettingFilter() {
+		t.Fatal("expected podcast list to be in filter mode after pressing /")
 	}
 }

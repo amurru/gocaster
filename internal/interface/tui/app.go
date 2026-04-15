@@ -121,8 +121,13 @@ func NewModel(svc *application.PodcastService) Model {
 	episodeList.SetShowTitle(false)
 	episodeList.SetShowHelp(false)
 	episodeList.SetShowStatusBar(false)
-	episodeList.SetFilteringEnabled(false)
 	episodeList.SetStatusBarItemName("episode", "episodes")
+	episodeList.Styles.Filter.Focused.Prompt = theme.Label
+	episodeList.Styles.Filter.Blurred.Prompt = theme.MutedText
+	episodeList.Styles.Filter.Focused.Text = theme.Body
+	episodeList.Styles.Filter.Blurred.Text = theme.Body
+	episodeList.Styles.Filter.Focused.Placeholder = theme.MutedText
+	episodeList.Styles.Filter.Blurred.Placeholder = theme.MutedText
 	episodeList.Styles.NoItems = theme.MutedText
 	episodeList.Styles.StatusBar = theme.MutedText
 	episodeList.Styles.PaginationStyle = theme.MutedText
@@ -292,19 +297,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleAddMode(msg, cmds)
 		}
 
-		if key.Matches(msg, m.keys.Add) {
+		isFiltering := m.list.FilterState() == list.Filtering || m.epList.FilterState() == list.Filtering
+
+		if key.Matches(msg, m.keys.Add) && !isFiltering {
 			m.openAddModal()
 			cmds = append(cmds, m.input.Focus())
 			return m, tea.Batch(cmds...)
 		}
 
-		if key.Matches(msg, m.keys.SwitchPane) {
+		if key.Matches(msg, m.keys.SwitchPane) && !isFiltering {
 			m.toggleFocus()
 			m.syncDetailViewport(false)
 			return m, tea.Batch(cmds...)
 		}
 
-		if key.Matches(msg, m.keys.RefreshPodcast) {
+		if key.Matches(msg, m.keys.RefreshPodcast) && !isFiltering {
 			if m.selectedPodcast == nil {
 				m.setStatus("No podcast selected to refresh", "warning")
 				return m, tea.Batch(cmds...)
@@ -426,9 +433,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			previousEpisodeID = selected.ID
 		}
 
-		// Handle play episode action before updating the list
+		// Handle play episode action before updating the list (skip if filtering)
 		if msg, ok := msg.(tea.KeyPressMsg); ok {
-			if key.Matches(msg, m.keys.PlayEpisode) {
+			if key.Matches(msg, m.keys.PlayEpisode) && m.epList.FilterState() != list.Filtering {
 				if selected := selectedEpisodeItem(m.epList); selected != nil {
 					m.setStatus(fmt.Sprintf("Playing: %s", selected.Title()), "success")
 					// TODO: Wire up to PlayerService.PlayEpisode()
@@ -678,7 +685,7 @@ func (m Model) renderHelpPage() string {
 
 func (m Model) renderPodcastPane() string {
 	title := m.theme.SectionTitle.Render("Podcasts")
-	subtitle := m.theme.MutedText.Render("Browse your subscriptions and filter with `/`.")
+	subtitle := m.theme.MutedText.Render("Browse your subscriptions. Press / to filter.")
 	panel := m.theme.Panel
 	if m.focus == focusLibrary {
 		panel = m.theme.PanelFocused
@@ -710,7 +717,7 @@ func (m Model) renderDetailPane() string {
 	paneHeight := max(m.detailHeight, 1)
 
 	title := m.theme.SectionTitle.Render("Details")
-	subtitle := m.theme.MutedText.Render("Selected show overview and recent episodes.")
+	subtitle := m.theme.MutedText.Render("Show details. Press / to filter episodes.")
 	header := lipgloss.JoinVertical(lipgloss.Left, title, subtitle)
 	innerHeight := max(paneHeight-panel.GetVerticalFrameSize()-lipgloss.Height(header), 1)
 
@@ -896,7 +903,7 @@ func (m Model) renderGuideContent(width int) string {
 			m.theme.Label.Render(
 				"↑ ↓ / j k / pgup pgdn",
 			) + "  Move through lists or scroll focused content",
-			m.theme.Label.Render("/") + "  Start filtering the podcast list",
+			m.theme.Label.Render("/") + "  Filter the focused list (podcasts or episodes)",
 			m.theme.Label.Render("enter / space") + "  Play the selected episode",
 		}, "\n")),
 	}
