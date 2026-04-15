@@ -20,6 +20,9 @@ func (p PodcastItem) Title() string {
 }
 
 func (p PodcastItem) Description() string {
+	if p.Podcast.Description == "" {
+		return p.Podcast.FeedURL
+	}
 	return p.Podcast.Description
 }
 

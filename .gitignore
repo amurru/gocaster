@@ -56,3 +56,7 @@ go.work
 
 # log files
 *.log
+*.db
+.omc/
+coverage.html
+docs/

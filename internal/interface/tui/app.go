@@ -2,151 +2,821 @@ package tui
 
 import (
 	"fmt"
+	"strings"
+	"time"
 
+	"charm.land/bubbles/v2/help"
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/list"
+	"charm.land/bubbles/v2/spinner"
+	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/amurru/gocaster/internal/application"
 	"github.com/amurru/gocaster/internal/domain"
+	"github.com/amurru/gocaster/internal/interface/tui/components"
+	"github.com/amurru/gocaster/internal/interface/tui/styles"
 )
 
-// Messages represent events coming back to the UI
+type viewState string
+type paneFocus string
+
+const (
+	stateBrowse     viewState = "browse"
+	stateAddPodcast viewState = "add_podcast"
+	stateHelp       viewState = "help"
+
+	focusLibrary paneFocus = "library"
+	focusDetail  paneFocus = "detail"
+)
+
+// Messages represent events coming back to the UI.
 type errMsg struct {
 	err error
 }
-type podcastsLoadedMsg []domain.Podcast
+
+type podcastsLoadedMsg struct {
+	podcasts []domain.Podcast
+	err      error
+}
+
 type podcastAddedMsg struct {
 	podcast *domain.Podcast
 	err     error
 }
+
+type episodesLoadedMsg struct {
+	podcastID int64
+	episodes  []domain.Episode
+	err       error
+}
+
 type Model struct {
-	// Services (DI)
 	podcastService *application.PodcastService
 
-	// UI State
-	state     string // "list", "add", "detail"
-	list      list.Model
-	inputMode bool
-	input     string
-	status    string
+	state  viewState
+	keys   keyMap
+	theme  styles.Theme
+	help   help.Model
+	list   list.Model
+	detail viewport.Model
+	guide  viewport.Model
+	input  textinput.Model
+	spin   spinner.Model
+	status string
+	kind   string
+
+	width  int
+	height int
+
+	bodyHeight   int
+	listWidth    int
+	detailWidth  int
+	detailHeight int
+
+	loadingLibrary bool
+	loadingDetail  bool
+	submitting     bool
+
+	focus           paneFocus
+	selectedPodcast *domain.Podcast
+	episodes        []domain.Episode
 }
 
 func NewModel(svc *application.PodcastService) Model {
-	// Initialize UI components
-	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
-	l.Title = "Podcasts"
+	theme := styles.NewTheme()
+	delegate := components.NewPodcastDelegate(theme)
+
+	podcastList := list.New([]list.Item{}, delegate, 0, 0)
+	podcastList.Title = "Podcasts"
+	podcastList.DisableQuitKeybindings()
+	podcastList.SetShowTitle(false)
+	podcastList.SetShowHelp(false)
+	podcastList.SetShowStatusBar(false)
+	podcastList.SetStatusBarItemName("podcast", "podcasts")
+	podcastList.Styles.Title = theme.Header
+	podcastList.Styles.Filter.Focused.Prompt = theme.Label
+	podcastList.Styles.Filter.Blurred.Prompt = theme.MutedText
+	podcastList.Styles.Filter.Focused.Text = theme.Body
+	podcastList.Styles.Filter.Blurred.Text = theme.Body
+	podcastList.Styles.Filter.Focused.Placeholder = theme.MutedText
+	podcastList.Styles.Filter.Blurred.Placeholder = theme.MutedText
+	podcastList.Styles.NoItems = theme.MutedText
+	podcastList.Styles.StatusBar = theme.MutedText
+	podcastList.Styles.PaginationStyle = theme.MutedText
+
+	detailViewport := viewport.New(viewport.WithWidth(0), viewport.WithHeight(0))
+	detailViewport.SoftWrap = true
+	detailViewport.FillHeight = true
+	detailViewport.MouseWheelEnabled = true
+	detailViewport.MouseWheelDelta = 2
+
+	guideViewport := viewport.New(viewport.WithWidth(0), viewport.WithHeight(0))
+	guideViewport.SoftWrap = true
+	guideViewport.FillHeight = true
+	guideViewport.MouseWheelEnabled = true
+	guideViewport.MouseWheelDelta = 2
+
+	input := textinput.New()
+	input.Prompt = ""
+	input.Placeholder = "https://example.com/feed.xml"
+	input.CharLimit = 512
+	input.SetVirtualCursor(true)
+	input.SetWidth(56)
+
+	spin := spinner.New(spinner.WithSpinner(spinner.Line))
+	spin.Style = lipgloss.NewStyle().Foreground(theme.Accent)
+
+	helpModel := help.New()
+	helpModel.ShowAll = false
+	helpModel.Styles.ShortKey = theme.HelpText
+	helpModel.Styles.ShortDesc = theme.HelpText
+	helpModel.Styles.FullKey = theme.HelpText
+	helpModel.Styles.FullDesc = theme.HelpText
 
 	return Model{
-		podcastService: svc,
-		list:           l,
-		state:          "list",
+		podcastService:  svc,
+		state:           stateBrowse,
+		keys:            defaultKeyMap(),
+		theme:           theme,
+		help:            helpModel,
+		list:            podcastList,
+		detail:          detailViewport,
+		guide:           guideViewport,
+		input:           input,
+		spin:            spin,
+		status:          "Ready",
+		kind:            "info",
+		loadingLibrary:  true,
+		focus:           focusLibrary,
+		selectedPodcast: nil,
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.loadPodcasts()
+	return tea.Batch(m.loadPodcasts(), m.spin.Tick)
 }
-
-// Commands
 
 func (m Model) loadPodcasts() tea.Cmd {
 	return func() tea.Msg {
 		podcasts, err := m.podcastService.ListPodcasts()
-		if err != nil {
-			return errMsg{err}
-		}
-		return podcastsLoadedMsg(podcasts)
+		return podcastsLoadedMsg{podcasts: podcasts, err: err}
+	}
+}
+
+func (m Model) loadEpisodes(podcastID int64) tea.Cmd {
+	return func() tea.Msg {
+		episodes, err := m.podcastService.ListEpisodes(podcastID)
+		return episodesLoadedMsg{podcastID: podcastID, episodes: episodes, err: err}
 	}
 }
 
 func (m Model) addPodcast(url string) tea.Cmd {
 	return func() tea.Msg {
 		podcast, err := m.podcastService.AddPodcast(url)
-		return podcastAddedMsg{podcast, err}
+		return podcastAddedMsg{podcast: podcast, err: err}
 	}
 }
-
-// Update - event loop
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	var cmds []tea.Cmd
+
+	if m.isBusy() {
+		var spinCmd tea.Cmd
+		m.spin, spinCmd = m.spin.Update(msg)
+		if spinCmd != nil {
+			cmds = append(cmds, spinCmd)
+		}
+	}
+
 	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" || msg.String() == "q" {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
+		m.resize()
+		return m, tea.Batch(cmds...)
+
+	case tea.KeyPressMsg:
+		switch {
+		case key.Matches(msg, m.keys.Quit):
 			return m, tea.Quit
-		}
-		if m.inputMode {
-			if msg.String() == "enter" {
-				return m, m.addPodcast(m.input)
+		case key.Matches(msg, m.keys.ToggleHelp):
+			if m.state == stateHelp {
+				m.state = stateBrowse
+				m.setStatus("Returned to library.", "info")
+			} else {
+				m.state = stateHelp
+				m.syncGuideViewport(true)
+				m.setStatus("Help page opened.", "info")
 			}
-			if msg.String() == "esc" {
-				m.inputMode = false
-				m.input = ""
+			return m, tea.Batch(cmds...)
+		}
+
+		if m.state == stateHelp {
+			if key.Matches(msg, m.keys.Close) {
+				m.state = stateBrowse
+				m.setStatus("Returned to library.", "info")
+				return m, tea.Batch(cmds...)
 			}
-			m.input += msg.String()
-			return m, nil
+
+			var guideCmd tea.Cmd
+			m.guide, guideCmd = m.guide.Update(msg)
+			if guideCmd != nil {
+				cmds = append(cmds, guideCmd)
+			}
+			return m, tea.Batch(cmds...)
 		}
-		if msg.String() == "a" {
-			m.inputMode = true
-			m.input = ""
+
+		if m.state == stateAddPodcast {
+			return m.handleAddMode(msg, cmds)
 		}
-	case tea.MouseMsg:
-		mouse := msg.Mouse()
-		if mouse.Button == tea.MouseLeft {
-			// TODO: handle click
+
+		if key.Matches(msg, m.keys.Add) {
+			m.openAddModal()
+			cmds = append(cmds, m.input.Focus())
+			return m, tea.Batch(cmds...)
 		}
+
+		if key.Matches(msg, m.keys.SwitchPane) {
+			m.toggleFocus()
+			m.syncDetailViewport(false)
+			return m, tea.Batch(cmds...)
+		}
+
 	case podcastsLoadedMsg:
-		items := make([]list.Item, len(msg))
-		for i, p := range msg {
-			items[i] = PodcastItem{Podcast: p}
+		m.loadingLibrary = false
+		if msg.err != nil {
+			m.setStatus("Failed to load podcasts", "error")
+			return m, tea.Batch(cmds...)
 		}
-		m.list.SetItems(items)
+
+		items := make([]list.Item, len(msg.podcasts))
+		for i, podcast := range msg.podcasts {
+			items[i] = PodcastItem{Podcast: podcast}
+		}
+		cmds = append(cmds, m.list.SetItems(items))
+
+		if len(msg.podcasts) == 0 {
+			m.selectedPodcast = nil
+			m.episodes = nil
+			m.syncDetailViewport(true)
+			m.setStatus("Library is empty. Press 'a' to add your first feed.", "info")
+			return m, tea.Batch(cmds...)
+		}
+
+		if m.selectedPodcast != nil {
+			for i, podcast := range msg.podcasts {
+				if podcast.ID == m.selectedPodcast.ID {
+					m.list.Select(i)
+					break
+				}
+			}
+		}
+
+		selected := selectedPodcastItem(m.list)
+		if selected != nil {
+			m.selectedPodcast = selected
+			m.loadingDetail = true
+			m.syncDetailViewport(true)
+			m.setStatus(fmt.Sprintf("Loaded %d podcasts", len(msg.podcasts)), "success")
+			cmds = append(cmds, m.loadEpisodes(selected.ID), m.spin.Tick)
+		}
+		return m, tea.Batch(cmds...)
+
+	case episodesLoadedMsg:
+		if m.selectedPodcast == nil || msg.podcastID != m.selectedPodcast.ID {
+			return m, tea.Batch(cmds...)
+		}
+
+		m.loadingDetail = false
+		if msg.err != nil {
+			m.episodes = nil
+			m.setStatus("Failed to load episodes", "error")
+			return m, tea.Batch(cmds...)
+		}
+
+		m.episodes = msg.episodes
+		m.syncDetailViewport(false)
+		return m, tea.Batch(cmds...)
 
 	case podcastAddedMsg:
+		m.submitting = false
 		if msg.err != nil {
-			m.status = fmt.Sprintf("Error: %v", msg.err)
-		} else {
-			m.status = fmt.Sprintf("Added podcast: %s", msg.podcast.Title)
-			return m, m.loadPodcasts()
+			m.setStatus(fmt.Sprintf("Add failed: %v", msg.err), "error")
+			return m, tea.Batch(cmds...)
 		}
+
+		m.state = stateBrowse
+		m.input.Blur()
+		m.input.Reset()
+		m.setStatus(fmt.Sprintf("Added %s", msg.podcast.Title), "success")
+		m.loadingLibrary = true
+		cmds = append(cmds, m.loadPodcasts(), m.spin.Tick)
+		return m, tea.Batch(cmds...)
+
+	case errMsg:
+		m.setStatus(msg.err.Error(), "error")
+		return m, tea.Batch(cmds...)
 	}
 
-	// Default list handling
-	var cmd tea.Cmd
-	m.list, cmd = m.list.Update(msg)
-	return m, cmd
+	if m.focus == focusDetail {
+		var detailCmd tea.Cmd
+		m.detail, detailCmd = m.detail.Update(msg)
+		if detailCmd != nil {
+			cmds = append(cmds, detailCmd)
+		}
+		return m, tea.Batch(cmds...)
+	}
+
+	previousID := int64(0)
+	if selected := selectedPodcastItem(m.list); selected != nil {
+		previousID = selected.ID
+	}
+
+	var listCmd tea.Cmd
+	m.list, listCmd = m.list.Update(msg)
+	if listCmd != nil {
+		cmds = append(cmds, listCmd)
+	}
+
+	selected := selectedPodcastItem(m.list)
+	if selected != nil && selected.ID != previousID {
+		m.selectedPodcast = selected
+		m.loadingDetail = true
+		m.syncDetailViewport(true)
+		cmds = append(cmds, m.loadEpisodes(selected.ID), m.spin.Tick)
+	}
+
+	return m, tea.Batch(cmds...)
 }
 
-// View
-
-func (m Model) View() tea.View {
-	var content string
-	if m.inputMode {
-		// Build input view
-		content = fmt.Sprintf(
-			"Add New Podcast\n\n%s\n\n%s",
-			m.input,
-			"Press Enter to add, Esc to cancel",
-		)
-	} else {
-		// Build main view
-		content = m.list.View()
+func (m Model) handleAddMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.Close) && !m.submitting {
+		m.state = stateBrowse
+		m.input.Blur()
+		m.input.Reset()
+		m.setStatus("Add podcast cancelled", "info")
+		return m, tea.Batch(cmds...)
 	}
 
-	// Add status bar
-	status := fmt.Sprintf(" [Press 'a' to add | 'q' to quit] | Status: %s ", m.status)
-	styledStatus := lipgloss.NewStyle().
-		Foreground(lipgloss.Color("#FAFAFA")).
-		Background(lipgloss.Color("#3C3C3C")).
-		Render(status)
+	if key.Matches(msg, m.keys.Submit) && !m.submitting {
+		value := strings.TrimSpace(m.input.Value())
+		if value == "" {
+			m.setStatus("Feed URL is required", "warning")
+			return m, tea.Batch(cmds...)
+		}
 
-	// Combine content and status
-	finalLayout := lipgloss.JoinVertical(lipgloss.Left, content, styledStatus)
-	v := tea.NewView(finalLayout)
+		m.submitting = true
+		m.setStatus("Fetching feed and saving episodes…", "info")
+		cmds = append(cmds, m.addPodcast(value), m.spin.Tick)
+		return m, tea.Batch(cmds...)
+	}
 
-	// Set view properties
-	v.AltScreen = true
-	v.WindowTitle = "Gocaster - TUI Podcast Manager"
-	v.MouseMode = tea.MouseModeCellMotion
-	v.ReportFocus = true
-	return v
+	var inputCmd tea.Cmd
+	m.input, inputCmd = m.input.Update(msg)
+	if inputCmd != nil {
+		cmds = append(cmds, inputCmd)
+	}
+	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) resize() {
+	if m.width <= 0 || m.height <= 0 {
+		return
+	}
+
+	contentWidth := m.contentWidth()
+	m.help.SetWidth(max(contentWidth, 20))
+	helpHeight := lipgloss.Height(m.help.View(m.keys))
+	bodyHeight := max(m.height-helpHeight-6, 8)
+	m.bodyHeight = bodyHeight
+
+	if m.shouldStackPanes() {
+		m.listWidth = max(contentWidth-4, 16)
+		m.detailWidth = max(contentWidth-4, 16)
+		m.detailHeight = max((bodyHeight-1)/2, 6)
+		m.list.SetSize(m.listWidth, max(bodyHeight/2, 6))
+	} else {
+		gap := 1
+		leftWidth := max(contentWidth/3, 24)
+		rightWidth := max(contentWidth-leftWidth-gap, 24)
+		if leftWidth+rightWidth+gap > contentWidth {
+			rightWidth = max(contentWidth-leftWidth-gap, 24)
+		}
+		if leftWidth+rightWidth+gap > contentWidth {
+			leftWidth = max(contentWidth-rightWidth-gap, 24)
+		}
+		m.listWidth = max(leftWidth-4, 16)
+		m.detailWidth = max(rightWidth-4, 16)
+		m.detailHeight = bodyHeight
+		m.list.SetSize(m.listWidth, bodyHeight)
+	}
+
+	m.input.SetWidth(min(max(contentWidth-12, 20), 72))
+	m.syncDetailViewport(false)
+	m.syncGuideViewport(false)
+}
+
+func (m *Model) openAddModal() {
+	m.state = stateAddPodcast
+	m.input.Reset()
+	m.input.Placeholder = "https://example.com/feed.xml"
+}
+
+func (m *Model) toggleFocus() {
+	if m.focus == focusLibrary {
+		m.focus = focusDetail
+		m.setStatus("Detail pane focused. Use arrow keys or PgUp/PgDn to scroll.", "info")
+		return
+	}
+	m.focus = focusLibrary
+	m.setStatus("Podcast list focused.", "info")
+}
+
+func (m *Model) setStatus(text, kind string) {
+	m.status = text
+	m.kind = kind
+}
+
+func (m Model) isBusy() bool {
+	return m.loadingLibrary || m.loadingDetail || m.submitting
+}
+
+func (m Model) View() tea.View {
+	content := m.renderContent()
+	layout := m.theme.App.Render(lipgloss.JoinVertical(lipgloss.Left,
+		m.renderHeader(),
+		content,
+		m.renderFooter(),
+	))
+
+	if m.state == stateAddPodcast {
+		layout = components.RenderModal(
+			m.theme,
+			max(m.width, 80),
+			max(m.height, 24),
+			m.renderAddModal(),
+		)
+	}
+
+	view := tea.NewView(layout)
+	view.AltScreen = true
+	view.WindowTitle = "Gocaster"
+	view.ReportFocus = true
+	view.MouseMode = tea.MouseModeCellMotion
+	view.ForegroundColor = m.theme.Text
+	return view
+}
+
+func (m Model) renderHeader() string {
+	width := m.contentWidth()
+	tagline := m.theme.MutedText.Render("Editorial podcast library")
+	count := "No podcasts"
+	if items := len(m.list.Items()); items > 0 {
+		count = fmt.Sprintf("%d podcasts", items)
+	}
+	badge := m.theme.Badge.Render(count)
+
+	left := lipgloss.JoinVertical(lipgloss.Left,
+		m.theme.Header.Width(max(width-lipgloss.Width(badge)-2, 10)).Render("Gocaster"),
+		tagline,
+	)
+
+	if width < lipgloss.Width(left)+lipgloss.Width(badge)+1 {
+		return lipgloss.JoinVertical(lipgloss.Left, left, badge)
+	}
+
+	spacerWidth := max(width-lipgloss.Width(left)-lipgloss.Width(badge), 1)
+	return lipgloss.JoinHorizontal(lipgloss.Top, left, lipgloss.NewStyle().Width(spacerWidth).Render(""), badge)
+}
+
+func (m Model) renderContent() string {
+	if m.state == stateHelp {
+		return m.renderHelpPage()
+	}
+
+	if m.loadingLibrary && len(m.list.Items()) == 0 {
+		return components.RenderLoading(m.theme, m.spin.View(), "Loading library…")
+	}
+
+	left := m.renderPodcastPane()
+	right := m.renderDetailPane()
+
+	if m.shouldStackPanes() {
+		return lipgloss.JoinVertical(lipgloss.Left, left, right)
+	}
+
+	gap := " "
+	leftWidth := lipgloss.Width(left)
+	rightWidth := max(m.contentWidth()-leftWidth-lipgloss.Width(gap), 1)
+	return lipgloss.JoinHorizontal(lipgloss.Top,
+		lipgloss.NewStyle().Width(leftWidth).MaxWidth(leftWidth).Render(left),
+		gap,
+		lipgloss.NewStyle().Width(rightWidth).MaxWidth(rightWidth).Render(right),
+	)
+}
+
+func (m Model) renderHelpPage() string {
+	title := m.theme.SectionTitle.Render("Help & Shortcuts")
+	subtitle := m.theme.MutedText.Render("How to use Gocaster and navigate the interface.")
+	panel := m.theme.PanelFocused.Width(max(m.contentWidth()-4, 20))
+
+	return panel.Render(lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		subtitle,
+		"",
+		m.guide.View(),
+	))
+}
+
+func (m Model) renderPodcastPane() string {
+	title := m.theme.SectionTitle.Render("Podcasts")
+	subtitle := m.theme.MutedText.Render("Browse your subscriptions and filter with `/`.")
+	panel := m.theme.Panel
+	if m.focus == focusLibrary {
+		panel = m.theme.PanelFocused
+	}
+
+	body := m.list.View()
+	if len(m.list.Items()) == 0 && !m.loadingLibrary {
+		body = m.theme.MutedText.Render("No podcasts yet.\n\nPress 'a' to add an RSS feed.")
+	}
+
+	return panel.Width(max(m.listWidth+4, 20)).
+		Render(lipgloss.JoinVertical(lipgloss.Left, title, subtitle, body))
+}
+
+func (m Model) renderDetailPane() string {
+	panel := m.theme.Panel
+	if m.focus == focusDetail {
+		panel = m.theme.PanelFocused
+	}
+
+	title := m.theme.SectionTitle.Render("Details")
+	subtitle := m.theme.MutedText.Render("Selected show overview and recent episodes.")
+
+	if m.selectedPodcast == nil {
+		return panel.Render(lipgloss.JoinVertical(
+			lipgloss.Left,
+			title,
+			subtitle,
+			m.theme.MutedText.Render(
+				"Select a podcast to see its description and recent episodes.",
+			),
+		))
+	}
+
+	return panel.Width(max(m.detailWidth+4, 20)).Render(lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		subtitle,
+		m.detail.View(),
+	))
+}
+
+func (m Model) renderDetailContent() string {
+	if m.selectedPodcast == nil {
+		return ""
+	}
+
+	detailParts := []string{
+		m.theme.SectionTitle.Render(m.selectedPodcast.Title),
+		lipgloss.JoinHorizontal(lipgloss.Left,
+			m.theme.Label.Render("Feed "),
+			m.theme.MutedText.Render(m.selectedPodcast.FeedURL),
+		),
+	}
+
+	if !m.selectedPodcast.LastUpdated.IsZero() {
+		detailParts = append(detailParts, lipgloss.JoinHorizontal(lipgloss.Left,
+			m.theme.Label.Render("Updated "),
+			m.theme.MutedText.Render(m.selectedPodcast.LastUpdated.Format(time.DateOnly)),
+		))
+	}
+
+	description := strings.TrimSpace(m.selectedPodcast.Description)
+	if description == "" {
+		description = "No description available."
+	}
+	detailParts = append(
+		detailParts,
+		m.theme.Body.Render(lipgloss.Wrap(description, max(m.detailPaneWidth()-4, 16), "")),
+	)
+
+	topCard := m.theme.Card.Width(max(m.detailPaneWidth(), 16)).
+		Render(strings.Join(detailParts, "\n"))
+
+	episodes := m.renderEpisodes()
+	return lipgloss.JoinVertical(lipgloss.Left,
+		topCard,
+		m.theme.SectionTitle.Render("Recent Episodes"),
+		episodes,
+	)
+}
+
+func (m Model) renderEpisodes() string {
+	if m.loadingDetail {
+		return components.RenderLoading(m.theme, m.spin.View(), "Loading episodes…")
+	}
+
+	if len(m.episodes) == 0 {
+		return m.theme.MutedText.Render("No stored episodes for this feed yet.")
+	}
+
+	maxItems := min(len(m.episodes), 8)
+	rows := make([]string, 0, maxItems)
+	for i := 0; i < maxItems; i++ {
+		episode := m.episodes[i]
+		status := "New"
+		if episode.IsPlayed {
+			status = "Played"
+		}
+
+		dateLabel := "Unknown date"
+		if !episode.PublishedAt.IsZero() {
+			dateLabel = episode.PublishedAt.Format("Jan 02, 2006")
+		}
+
+		rows = append(
+			rows,
+			m.theme.Card.Width(max(m.detailPaneWidth(), 16)).Render(lipgloss.JoinVertical(
+				lipgloss.Left,
+				m.theme.Label.Render(status+"  •  "+dateLabel),
+				m.theme.Body.Render(episode.Title),
+				m.theme.MutedText.Render(
+					lipgloss.Wrap(
+						components.TruncateDescription(episode.Description, 140),
+						max(m.detailPaneWidth()-6, 16),
+						"",
+					),
+				),
+			)),
+		)
+	}
+
+	return strings.Join(rows, "\n")
+}
+
+func (m Model) renderAddModal() string {
+	inputStyle := m.theme.Input
+	if m.input.Focused() {
+		inputStyle = m.theme.InputFocused
+	}
+
+	body := []string{
+		m.theme.SectionTitle.Render("Add Podcast"),
+		m.theme.MutedText.Render(
+			"Paste an RSS feed URL. Episodes will be fetched and stored immediately.",
+		),
+		m.theme.Label.Render("Feed URL"),
+		inputStyle.Render(m.input.View()),
+	}
+
+	if m.submitting {
+		body = append(body, components.RenderLoading(m.theme, m.spin.View(), "Importing feed…"))
+	} else {
+		body = append(body, m.theme.MutedText.Render("Enter to submit, Esc to cancel"))
+	}
+
+	return strings.Join(body, "\n\n")
+}
+
+func (m Model) renderFooter() string {
+	if m.state == stateHelp {
+		status := lipgloss.JoinHorizontal(lipgloss.Left,
+			m.theme.StatusStyle(m.kind).Render(m.status),
+		)
+		hint := m.theme.HelpText.Render(
+			"Press ? or Esc to return. Use arrow keys, j/k, PgUp/PgDn, or the mouse wheel to scroll.",
+		)
+		return lipgloss.JoinVertical(lipgloss.Left, status, hint)
+	}
+
+	status := lipgloss.JoinHorizontal(lipgloss.Left,
+		m.theme.StatusStyle(m.kind).Render(m.status),
+	)
+	helpView := m.theme.HelpText.Render(m.help.View(m.keys))
+	return lipgloss.JoinVertical(lipgloss.Left, status, helpView)
+}
+
+func (m Model) detailPaneWidth() int {
+	if m.detailWidth <= 0 || m.contentWidth() <= 0 {
+		return max(m.contentWidth()-4, 16)
+	}
+	return m.detailWidth
+}
+
+func (m *Model) syncDetailViewport(reset bool) {
+	width := max(m.detailPaneWidth(), 16)
+	height := max(m.detailHeight-2, 5)
+
+	m.detail.SetWidth(width)
+	m.detail.SetHeight(height)
+	m.detail.SetContent(m.renderDetailContent())
+	if reset {
+		m.detail.GotoTop()
+	}
+}
+
+func (m *Model) syncGuideViewport(reset bool) {
+	width := max(m.contentWidth()-8, 20)
+	height := max(m.bodyHeight-4, 6)
+
+	m.guide.SetWidth(width)
+	m.guide.SetHeight(height)
+	m.guide.SetContent(m.renderGuideContent(width))
+	if reset {
+		m.guide.GotoTop()
+	}
+}
+
+func (m Model) renderGuideContent(width int) string {
+	wrapWidth := max(width-4, 16)
+
+	shortcuts := []string{
+		m.theme.SectionTitle.Render("Shortcuts"),
+		m.theme.Card.Width(wrapWidth).Render(strings.Join([]string{
+			m.theme.Label.Render("a") + "  Add a podcast feed",
+			m.theme.Label.Render("tab") + "  Switch focus between the library and detail panes",
+			m.theme.Label.Render("enter") + "  Confirm actions in dialogs and list filtering",
+			m.theme.Label.Render("esc") + "  Close dialogs or leave this help page",
+			m.theme.Label.Render("?") + "  Open or close this help page",
+			m.theme.Label.Render("q / ctrl+c") + "  Quit the app",
+			m.theme.Label.Render(
+				"↑ ↓ / j k / pgup pgdn",
+			) + "  Move through lists or scroll focused content",
+			m.theme.Label.Render("/") + "  Start filtering the podcast list",
+		}, "\n")),
+	}
+
+	usage := []string{
+		m.theme.SectionTitle.Render("How To Use The App"),
+		m.theme.Card.Width(wrapWidth).Render(strings.Join([]string{
+			"1. Start in the podcast library on the left. If the library is empty, press " + m.theme.Label.Render(
+				"a",
+			) + " and paste an RSS feed URL.",
+			"2. Move through podcasts with the list keys. The selected show loads metadata and stored episodes into the detail pane.",
+			"3. Press " + m.theme.Label.Render(
+				"tab",
+			) + " to focus the detail pane when you want to scroll long descriptions or episode lists.",
+			"4. Press " + m.theme.Label.Render(
+				"tab",
+			) + " again to return focus to the podcast list.",
+			"5. Press " + m.theme.Label.Render("?") + " any time to revisit this help page.",
+		}, "\n\n")),
+	}
+
+	tips := []string{
+		m.theme.SectionTitle.Render("What You're Looking At"),
+		m.theme.Card.Width(wrapWidth).Render(strings.Join([]string{
+			"The left pane is your podcast library.",
+			"The right pane shows the selected podcast description, feed info, and recent episodes.",
+			"The status bar at the bottom shows feedback for loading, errors, and actions.",
+		}, "\n")),
+	}
+
+	return lipgloss.JoinVertical(lipgloss.Left,
+		shortcuts[0],
+		shortcuts[1],
+		"",
+		usage[0],
+		usage[1],
+		"",
+		tips[0],
+		tips[1],
+	)
+}
+
+func selectedPodcastItem(listModel list.Model) *domain.Podcast {
+	item, ok := listModel.SelectedItem().(PodcastItem)
+	if !ok {
+		return nil
+	}
+	podcast := item.Podcast
+	return &podcast
+}
+
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func (m Model) contentWidth() int {
+	if m.width <= 0 {
+		return 80
+	}
+	return max(m.width-4, 20)
+}
+
+func (m Model) shouldStackPanes() bool {
+	return m.contentWidth() < 80
 }
