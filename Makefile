@@ -9,10 +9,10 @@ build:
 
 # Run the application
 run:
-	@go run ./cmd
+	@go run ./cmd/gocaster/
 
 debug-run:
-	@env DEBUG=true go run ./cmd
+	@env DEBUG=true go run ./cmd/gocaster/
 
 # Test the application
 test:
