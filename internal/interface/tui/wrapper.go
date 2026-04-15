@@ -72,7 +72,8 @@ func (e EpisodeItem) Description() string {
 		}
 	}
 
-	return fmt.Sprintf("%s  •  %s", status, dateLabel)
+	duration := e.Duration()
+	return fmt.Sprintf("%s  •  %s  •  %s", status, dateLabel, duration)
 }
 
 // StatusBadge returns a short status indicator for styling.
@@ -89,6 +90,19 @@ func (e EpisodeItem) DateLabel() string {
 		return "Unknown date"
 	}
 	return e.PublishedAt.Format("Jan 02, 2006")
+}
+
+// Duration returns the formatted duration string.
+func (e EpisodeItem) Duration() string {
+	if e.PlaybackDuration == 0 {
+		return ""
+	}
+	hours := e.PlaybackDuration / 3600
+	minutes := (e.PlaybackDuration % 3600) / 60
+	if hours > 0 {
+		return fmt.Sprintf("%dh %dm", hours, minutes)
+	}
+	return fmt.Sprintf("%dm", minutes)
 }
 
 // IsNew returns true if the episode has not been played.
