@@ -5,7 +5,7 @@ all: build test
 
 build:
 	@echo "Building..."
-	@go build -o bin/gocaster ./cmd
+	@go build -o bin/gocaster ./cmd/gocaster/
 
 # Run the application
 run:
