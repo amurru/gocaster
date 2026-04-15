@@ -1,4 +1,4 @@
-package app
+package gocaster
 
 import tea "charm.land/bubbletea/v2"
 

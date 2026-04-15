@@ -6,7 +6,7 @@ import (
 	"os"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/amurru/gocaster/internal/app"
+	"github.com/amurru/gocaster/internal/gocaster"
 )
 
 func main() {
@@ -18,7 +18,7 @@ func main() {
 		}
 		defer f.Close()
 	}
-	p := tea.NewProgram(app.InitialModel())
+	p := tea.NewProgram(gocaster.InitialModel())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Alas, there's been an error: %v", err)
 		os.Exit(1)

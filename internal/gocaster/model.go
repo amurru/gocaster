@@ -1,4 +1,4 @@
-package app
+package gocaster
 
 type model struct {
 	cursor int
