@@ -11,6 +11,9 @@ build:
 run:
 	@go run ./cmd
 
+debug-run:
+	@env DEBUG=true go run ./cmd
+
 # Test the application
 test:
 	@echo "Testing..."
