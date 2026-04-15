@@ -60,3 +60,4 @@ go.work
 .omc/
 coverage.html
 docs/
+sample_podcast.xml
