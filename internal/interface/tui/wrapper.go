@@ -1,6 +1,12 @@
 package tui
 
-import "github.com/amurru/gocaster/internal/domain"
+import (
+	"fmt"
+
+	"charm.land/lipgloss/v2"
+	"github.com/amurru/gocaster/internal/domain"
+	"github.com/amurru/gocaster/internal/interface/tui/styles"
+)
 
 // PodcastItem wraps a domain.Podcast to satisfy the list.Item interface.
 // This keeps UI-specific code (FilterValue) out of your Domain layer.
@@ -28,6 +34,8 @@ func (p PodcastItem) Description() string {
 
 type EpisodeItem struct {
 	domain.Episode
+	Theme     styles.Theme
+	FlashTick int64
 }
 
 func (e EpisodeItem) FilterValue() string {
@@ -38,9 +46,64 @@ func (e EpisodeItem) Title() string {
 	return e.Episode.Title
 }
 
+// Description returns styled description with NEW/PLAYED indicators.
 func (e EpisodeItem) Description() string {
-	if e.IsPlayed {
-		return "Played"
+	dateLabel := "Unknown date"
+	if !e.PublishedAt.IsZero() {
+		dateLabel = e.PublishedAt.Format("Jan 02, 2006")
 	}
-	return "New"
+
+	var status string
+	if e.IsPlayed {
+		status = lipgloss.NewStyle().
+			Foreground(e.Theme.Muted).
+			Render("PLAYED")
+	} else {
+		// Flashing effect: alternate based on tick
+		if e.FlashTick%2 == 0 {
+			status = lipgloss.NewStyle().
+				Foreground(e.Theme.Success).
+				Bold(true).
+				Render("NEW")
+		} else {
+			status = lipgloss.NewStyle().
+				Foreground(e.Theme.SurfaceAlt).
+				Render("NEW")
+		}
+	}
+
+	return fmt.Sprintf("%s  •  %s", status, dateLabel)
+}
+
+// StatusBadge returns a short status indicator for styling.
+func (e EpisodeItem) StatusBadge() string {
+	if e.IsPlayed {
+		return "PLAYED"
+	}
+	return "NEW"
+}
+
+// DateLabel returns the formatted publication date.
+func (e EpisodeItem) DateLabel() string {
+	if e.PublishedAt.IsZero() {
+		return "Unknown date"
+	}
+	return e.PublishedAt.Format("Jan 02, 2006")
+}
+
+// IsNew returns true if the episode has not been played.
+func (e EpisodeItem) IsNew() bool {
+	return !e.IsPlayed
+}
+
+// WithTheme returns a copy of the EpisodeItem with the given theme.
+func (e EpisodeItem) WithTheme(theme styles.Theme) EpisodeItem {
+	e.Theme = theme
+	return e
+}
+
+// WithFlashTick returns a copy of the EpisodeItem with the given flash tick.
+func (e EpisodeItem) WithFlashTick(tick int64) EpisodeItem {
+	e.FlashTick = tick
+	return e
 }

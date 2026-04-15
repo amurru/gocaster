@@ -60,6 +60,7 @@ type Model struct {
 	theme  styles.Theme
 	help   help.Model
 	list   list.Model
+	epList list.Model
 	detail viewport.Model
 	guide  viewport.Model
 	input  textinput.Model
@@ -79,14 +80,16 @@ type Model struct {
 	loadingDetail  bool
 	submitting     bool
 
-	focus           paneFocus
-	selectedPodcast *domain.Podcast
-	episodes        []domain.Episode
+	focus            paneFocus
+	selectedPodcast  *domain.Podcast
+	episodes         []domain.Episode
+	selectedEpisode  *domain.Episode
 }
 
 func NewModel(svc *application.PodcastService) Model {
 	theme := styles.NewTheme()
 	delegate := components.NewPodcastDelegate(theme)
+	episodeDelegate := components.NewEpisodeDelegate(theme)
 
 	podcastList := list.New([]list.Item{}, delegate, 0, 0)
 	podcastList.Title = "Podcasts"
@@ -105,6 +108,18 @@ func NewModel(svc *application.PodcastService) Model {
 	podcastList.Styles.NoItems = theme.MutedText
 	podcastList.Styles.StatusBar = theme.MutedText
 	podcastList.Styles.PaginationStyle = theme.MutedText
+
+	episodeList := list.New([]list.Item{}, episodeDelegate, 0, 0)
+	episodeList.Title = "Episodes"
+	episodeList.DisableQuitKeybindings()
+	episodeList.SetShowTitle(false)
+	episodeList.SetShowHelp(false)
+	episodeList.SetShowStatusBar(false)
+	episodeList.SetFilteringEnabled(false)
+	episodeList.SetStatusBarItemName("episode", "episodes")
+	episodeList.Styles.NoItems = theme.MutedText
+	episodeList.Styles.StatusBar = theme.MutedText
+	episodeList.Styles.PaginationStyle = theme.MutedText
 
 	detailViewport := viewport.New(viewport.WithWidth(0), viewport.WithHeight(0))
 	detailViewport.SoftWrap = true
@@ -142,6 +157,7 @@ func NewModel(svc *application.PodcastService) Model {
 		theme:           theme,
 		help:            helpModel,
 		list:            podcastList,
+		epList:          episodeList,
 		detail:          detailViewport,
 		guide:           guideViewport,
 		input:           input,
@@ -151,12 +167,24 @@ func NewModel(svc *application.PodcastService) Model {
 		loadingLibrary:  true,
 		focus:           focusLibrary,
 		selectedPodcast: nil,
+		episodes:        nil,
+		selectedEpisode: nil,
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.loadPodcasts(), m.spin.Tick)
+	return tea.Batch(m.loadPodcasts(), m.spin.Tick, tickCmd())
 }
+
+// tickCmd returns a command that ticks every second for badge flashing.
+func tickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(_ time.Time) tea.Msg {
+		return tickMsg{}
+	})
+}
+
+// tickMsg is a message that fires every second for UI updates like badge flashing.
+type tickMsg struct{}
 
 func (m Model) loadPodcasts() tea.Cmd {
 	return func() tea.Msg {
@@ -195,6 +223,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.resize()
+		return m, tea.Batch(cmds...)
+
+	case tickMsg:
+		// Keep the ticker running for badge flashing
+		cmds = append(cmds, tickCmd())
+		
+		// Update episode list items with flash tick
+		if len(m.episodes) > 0 {
+			flashTick := time.Now().Unix()
+			items := make([]list.Item, len(m.episodes))
+			for i, episode := range m.episodes {
+				items[i] = EpisodeItem{Episode: episode}.WithTheme(m.theme).WithFlashTick(flashTick)
+			}
+			cmds = append(cmds, m.epList.SetItems(items))
+		}
 		return m, tea.Batch(cmds...)
 
 	case tea.KeyPressMsg:
@@ -292,11 +335,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loadingDetail = false
 		if msg.err != nil {
 			m.episodes = nil
+			m.selectedEpisode = nil
 			m.setStatus("Failed to load episodes", "error")
 			return m, tea.Batch(cmds...)
 		}
 
 		m.episodes = msg.episodes
+		m.selectedEpisode = nil
+
+		// Populate episode list with theme for badge styling
+		items := make([]list.Item, len(msg.episodes))
+		for i, episode := range msg.episodes {
+			items[i] = EpisodeItem{Episode: episode}.WithTheme(m.theme)
+		}
+		cmds = append(cmds, m.epList.SetItems(items))
+
 		m.syncDetailViewport(false)
 		return m, tea.Batch(cmds...)
 
@@ -321,6 +374,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	if m.focus == focusDetail {
+		// Handle episode navigation when detail pane is focused
+		previousEpisodeID := int64(0)
+		if selected := selectedEpisodeItem(m.epList); selected != nil {
+			previousEpisodeID = selected.ID
+		}
+
+		// Handle play episode action before updating the list
+		if msg, ok := msg.(tea.KeyPressMsg); ok {
+			if key.Matches(msg, m.keys.PlayEpisode) {
+				if selected := selectedEpisodeItem(m.epList); selected != nil {
+					m.setStatus(fmt.Sprintf("Playing: %s", selected.Title()), "success")
+					// TODO: Wire up to PlayerService.PlayEpisode()
+				}
+			}
+		}
+
+		var epListCmd tea.Cmd
+		m.epList, epListCmd = m.epList.Update(msg)
+		if epListCmd != nil {
+			cmds = append(cmds, epListCmd)
+		}
+
+		selected := selectedEpisodeItem(m.epList)
+		if selected != nil && selected.ID != previousEpisodeID {
+			m.selectedEpisode = &selected.Episode
+		}
+
 		var detailCmd tea.Cmd
 		m.detail, detailCmd = m.detail.Update(msg)
 		if detailCmd != nil {
@@ -427,7 +507,11 @@ func (m *Model) openAddModal() {
 func (m *Model) toggleFocus() {
 	if m.focus == focusLibrary {
 		m.focus = focusDetail
-		m.setStatus("Detail pane focused. Use arrow keys or PgUp/PgDn to scroll.", "info")
+		if len(m.episodes) > 0 {
+			m.setStatus("Detail pane focused. Use j/k or arrow keys to navigate episodes, enter/space to play.", "info")
+		} else {
+			m.setStatus("Detail pane focused. Use arrow keys or PgUp/PgDn to scroll.", "info")
+		}
 		return
 	}
 	m.focus = focusLibrary
@@ -570,7 +654,7 @@ func (m Model) renderDetailPane() string {
 	return panel.Width(max(m.detailWidth+4, 20)).Render(lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		subtitle,
-		m.detail.View(),
+		m.renderDetailContent(),
 	))
 }
 
@@ -623,38 +707,10 @@ func (m Model) renderEpisodes() string {
 		return m.theme.MutedText.Render("No stored episodes for this feed yet.")
 	}
 
-	maxItems := min(len(m.episodes), 8)
-	rows := make([]string, 0, maxItems)
-	for i := 0; i < maxItems; i++ {
-		episode := m.episodes[i]
-		status := "New"
-		if episode.IsPlayed {
-			status = "Played"
-		}
-
-		dateLabel := "Unknown date"
-		if !episode.PublishedAt.IsZero() {
-			dateLabel = episode.PublishedAt.Format("Jan 02, 2006")
-		}
-
-		rows = append(
-			rows,
-			m.theme.Card.Width(max(m.detailPaneWidth(), 16)).Render(lipgloss.JoinVertical(
-				lipgloss.Left,
-				m.theme.Label.Render(status+"  •  "+dateLabel),
-				m.theme.Body.Render(episode.Title),
-				m.theme.MutedText.Render(
-					lipgloss.Wrap(
-						components.TruncateDescription(episode.Description, 140),
-						max(m.detailPaneWidth()-6, 16),
-						"",
-					),
-				),
-			)),
-		)
-	}
-
-	return strings.Join(rows, "\n")
+	// Set the size of the episode list and render it
+	m.epList.SetSize(max(m.detailPaneWidth(), 16), min(len(m.episodes), 8)*3+2)
+	
+	return m.epList.View()
 }
 
 func (m Model) renderAddModal() string {
@@ -746,6 +802,7 @@ func (m Model) renderGuideContent(width int) string {
 				"↑ ↓ / j k / pgup pgdn",
 			) + "  Move through lists or scroll focused content",
 			m.theme.Label.Render("/") + "  Start filtering the podcast list",
+			m.theme.Label.Render("enter / space") + "  Play the selected episode",
 		}, "\n")),
 	}
 
@@ -758,11 +815,14 @@ func (m Model) renderGuideContent(width int) string {
 			"2. Move through podcasts with the list keys. The selected show loads metadata and stored episodes into the detail pane.",
 			"3. Press " + m.theme.Label.Render(
 				"tab",
-			) + " to focus the detail pane when you want to scroll long descriptions or episode lists.",
-			"4. Press " + m.theme.Label.Render(
+			) + " to focus the detail pane when you want to navigate episodes or scroll long descriptions.",
+			"4. In the detail pane, use " + m.theme.Label.Render("j/k") + " or arrow keys to navigate between episodes. The selected episode is highlighted with an accent border.",
+			"5. Press " + m.theme.Label.Render("enter") + " or " + m.theme.Label.Render("space") + " to play the selected episode.",
+			"6. Episodes show a " + lipgloss.NewStyle().Foreground(m.theme.Success).Bold(true).Render("NEW") + " indicator for unplayed episodes and a " + m.theme.MutedText.Render("PLAYED") + " indicator for played ones.",
+			"7. Press " + m.theme.Label.Render(
 				"tab",
 			) + " again to return focus to the podcast list.",
-			"5. Press " + m.theme.Label.Render("?") + " any time to revisit this help page.",
+			"8. Press " + m.theme.Label.Render("?") + " any time to revisit this help page.",
 		}, "\n\n")),
 	}
 
@@ -771,6 +831,9 @@ func (m Model) renderGuideContent(width int) string {
 		m.theme.Card.Width(wrapWidth).Render(strings.Join([]string{
 			"The left pane is your podcast library.",
 			"The right pane shows the selected podcast description, feed info, and recent episodes.",
+			"Episodes with a " + lipgloss.NewStyle().Foreground(m.theme.Success).Bold(true).Render("NEW") + " indicator haven't been played yet.",
+			"Episodes with a " + m.theme.MutedText.Render("PLAYED") + " indicator have been played.",
+			"The selected episode has a highlighted left border in the accent color.",
 			"The status bar at the bottom shows feedback for loading, errors, and actions.",
 		}, "\n")),
 	}
@@ -794,6 +857,15 @@ func selectedPodcastItem(listModel list.Model) *domain.Podcast {
 	}
 	podcast := item.Podcast
 	return &podcast
+}
+
+func selectedEpisodeItem(listModel list.Model) *EpisodeItem {
+	item, ok := listModel.SelectedItem().(EpisodeItem)
+	if !ok {
+		return nil
+	}
+	episode := item
+	return &episode
 }
 
 func min(a, b int) int {

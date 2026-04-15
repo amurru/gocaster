@@ -24,12 +24,15 @@ type Theme struct {
 	Panel        lipgloss.Style
 	PanelFocused lipgloss.Style
 	Card         lipgloss.Style
+	CardSelected lipgloss.Style
 	Label        lipgloss.Style
 	Body         lipgloss.Style
 	MutedText    lipgloss.Style
 	StatusBar    lipgloss.Style
 	HelpText     lipgloss.Style
 	Badge        lipgloss.Style
+	BadgeNew     lipgloss.Style
+	BadgePlayed  lipgloss.Style
 	Input        lipgloss.Style
 	InputFocused lipgloss.Style
 	Modal        lipgloss.Style
@@ -85,6 +88,10 @@ func NewTheme() Theme {
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(border).
 			Padding(1),
+		CardSelected: lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(accent).
+			Padding(1),
 		Label: lipgloss.NewStyle().
 			Foreground(accentSoft).
 			Bold(true),
@@ -103,6 +110,17 @@ func NewTheme() Theme {
 			Foreground(accentSoft).
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(accentSoft).
+			Padding(0, 1),
+		BadgeNew: lipgloss.NewStyle().
+			Foreground(success).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(success).
+			Padding(0, 1).
+			Bold(true),
+		BadgePlayed: lipgloss.NewStyle().
+			Foreground(muted).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(muted).
 			Padding(0, 1),
 		Input: lipgloss.NewStyle().
 			Foreground(text).
