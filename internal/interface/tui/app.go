@@ -239,7 +239,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.epList.SetItems(items))
 		}
 		return m, tea.Batch(cmds...)
-
+	case tea.PasteMsg:
+		// Pass the paste directly to the input component
+		var cmd tea.Cmd
+		m.input, cmd = m.input.Update(msg)
+		return m, cmd
 	case tea.KeyPressMsg:
 		switch {
 		case key.Matches(msg, m.keys.Quit):
@@ -513,7 +517,10 @@ func (m *Model) toggleFocus() {
 	if m.focus == focusLibrary {
 		m.focus = focusDetail
 		if len(m.episodes) > 0 {
-			m.setStatus("Detail pane focused. Use j/k or arrow keys to navigate episodes, enter/space to play.", "info")
+			m.setStatus(
+				"Detail pane focused. Use j/k or arrow keys to navigate episodes, enter/space to play.",
+				"info",
+			)
 		} else {
 			m.setStatus("Detail pane focused. Use arrow keys or PgUp/PgDn to scroll.", "info")
 		}
@@ -577,7 +584,12 @@ func (m Model) renderHeader() string {
 	}
 
 	spacerWidth := max(width-lipgloss.Width(left)-lipgloss.Width(badge), 1)
-	return lipgloss.JoinHorizontal(lipgloss.Top, left, lipgloss.NewStyle().Width(spacerWidth).Render(""), badge)
+	return lipgloss.JoinHorizontal(
+		lipgloss.Top,
+		left,
+		lipgloss.NewStyle().Width(spacerWidth).Render(""),
+		badge,
+	)
 }
 
 func (m Model) renderContent() string {
@@ -669,11 +681,14 @@ func (m Model) renderDetailPane() string {
 		))
 	}
 
-	return panel.Width(max(m.detailWidth+4, 20)).Height(paneHeight).MaxHeight(paneHeight).Render(lipgloss.JoinVertical(lipgloss.Left,
-		title,
-		subtitle,
-		m.renderDetailContent(),
-	))
+	return panel.Width(max(m.detailWidth+4, 20)).
+		Height(paneHeight).
+		MaxHeight(paneHeight).
+		Render(lipgloss.JoinVertical(lipgloss.Left,
+			title,
+			subtitle,
+			m.renderDetailContent(),
+		))
 }
 
 func (m Model) renderDetailContent() string {
@@ -834,9 +849,21 @@ func (m Model) renderGuideContent(width int) string {
 			"3. Press " + m.theme.Label.Render(
 				"tab",
 			) + " to focus the detail pane when you want to navigate episodes or scroll long descriptions.",
-			"4. In the detail pane, use " + m.theme.Label.Render("j/k") + " or arrow keys to navigate between episodes. The selected episode is highlighted with an accent border.",
-			"5. Press " + m.theme.Label.Render("enter") + " or " + m.theme.Label.Render("space") + " to play the selected episode.",
-			"6. Episodes show a " + lipgloss.NewStyle().Foreground(m.theme.Success).Bold(true).Render("NEW") + " indicator for unplayed episodes and a " + m.theme.MutedText.Render("PLAYED") + " indicator for played ones.",
+			"4. In the detail pane, use " + m.theme.Label.Render(
+				"j/k",
+			) + " or arrow keys to navigate between episodes. The selected episode is highlighted with an accent border.",
+			"5. Press " + m.theme.Label.Render(
+				"enter",
+			) + " or " + m.theme.Label.Render(
+				"space",
+			) + " to play the selected episode.",
+			"6. Episodes show a " + lipgloss.NewStyle().
+				Foreground(m.theme.Success).
+				Bold(true).
+				Render("NEW") +
+				" indicator for unplayed episodes and a " + m.theme.MutedText.Render(
+				"PLAYED",
+			) + " indicator for played ones.",
 			"7. Press " + m.theme.Label.Render(
 				"tab",
 			) + " again to return focus to the podcast list.",
@@ -849,8 +876,14 @@ func (m Model) renderGuideContent(width int) string {
 		m.theme.Card.Width(wrapWidth).Render(strings.Join([]string{
 			"The left pane is your podcast library.",
 			"The right pane shows the selected podcast description, feed info, and recent episodes.",
-			"Episodes with a " + lipgloss.NewStyle().Foreground(m.theme.Success).Bold(true).Render("NEW") + " indicator haven't been played yet.",
-			"Episodes with a " + m.theme.MutedText.Render("PLAYED") + " indicator have been played.",
+			"Episodes with a " + lipgloss.NewStyle().
+				Foreground(m.theme.Success).
+				Bold(true).
+				Render("NEW") +
+				" indicator haven't been played yet.",
+			"Episodes with a " + m.theme.MutedText.Render(
+				"PLAYED",
+			) + " indicator have been played.",
 			"The selected episode has a highlighted left border in the accent color.",
 			"The status bar at the bottom shows feedback for loading, errors, and actions.",
 		}, "\n")),
