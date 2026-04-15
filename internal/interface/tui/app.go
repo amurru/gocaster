@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -23,12 +24,20 @@ type viewState string
 type paneFocus string
 
 const (
-	stateBrowse     viewState = "browse"
-	stateAddPodcast viewState = "add_podcast"
-	stateHelp       viewState = "help"
+	stateBrowse      viewState = "browse"
+	stateAddPodcast  viewState = "add_podcast"
+	stateGoToEpisode viewState = "go_to_episode"
+	stateHelp        viewState = "help"
 
 	focusLibrary paneFocus = "library"
 	focusDetail  paneFocus = "detail"
+)
+
+type episodeSortOrder string
+
+const (
+	sortNewestFirst episodeSortOrder = "newest"
+	sortOldestFirst episodeSortOrder = "oldest"
 )
 
 // Messages represent events coming back to the UI.
@@ -61,18 +70,19 @@ type podcastRefreshedMsg struct {
 type Model struct {
 	podcastService *application.PodcastService
 
-	state  viewState
-	keys   keyMap
-	theme  styles.Theme
-	help   help.Model
-	list   list.Model
-	epList list.Model
-	detail viewport.Model
-	guide  viewport.Model
-	input  textinput.Model
-	spin   spinner.Model
-	status string
-	kind   string
+	state     viewState
+	keys      keyMap
+	theme     styles.Theme
+	help      help.Model
+	list      list.Model
+	epList    list.Model
+	detail    viewport.Model
+	guide     viewport.Model
+	input     textinput.Model
+	goToInput textinput.Model
+	spin      spinner.Model
+	status    string
+	kind      string
 
 	width  int
 	height int
@@ -90,6 +100,7 @@ type Model struct {
 	selectedPodcast *domain.Podcast
 	episodes        []domain.Episode
 	selectedEpisode *domain.Episode
+	sortOrder       episodeSortOrder
 }
 
 func NewModel(svc *application.PodcastService) Model {
@@ -151,6 +162,13 @@ func NewModel(svc *application.PodcastService) Model {
 	input.SetVirtualCursor(true)
 	input.SetWidth(56)
 
+	goToInput := textinput.New()
+	goToInput.Prompt = ""
+	goToInput.Placeholder = "episode number"
+	goToInput.CharLimit = 6
+	goToInput.SetVirtualCursor(true)
+	goToInput.SetWidth(20)
+
 	spin := spinner.New(spinner.WithSpinner(spinner.Line))
 	spin.Style = lipgloss.NewStyle().Foreground(theme.Accent)
 
@@ -172,6 +190,7 @@ func NewModel(svc *application.PodcastService) Model {
 		detail:          detailViewport,
 		guide:           guideViewport,
 		input:           input,
+		goToInput:       goToInput,
 		spin:            spin,
 		status:          "Ready",
 		kind:            "info",
@@ -180,6 +199,7 @@ func NewModel(svc *application.PodcastService) Model {
 		selectedPodcast: nil,
 		episodes:        nil,
 		selectedEpisode: nil,
+		sortOrder:       sortNewestFirst,
 	}
 }
 
@@ -297,6 +317,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleAddMode(msg, cmds)
 		}
 
+		if m.state == stateGoToEpisode {
+			return m.handleGoToEpisodeMode(msg, cmds)
+		}
+
 		isFiltering := m.list.FilterState() == list.Filtering || m.epList.FilterState() == list.Filtering
 
 		if key.Matches(msg, m.keys.Add) && !isFiltering {
@@ -319,6 +343,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loadingDetail = true
 			m.setStatus("Refreshing feed…", "info")
 			cmds = append(cmds, m.refreshPodcast(m.selectedPodcast.ID), m.spin.Tick)
+			return m, tea.Batch(cmds...)
+		}
+
+		if key.Matches(msg, m.keys.ToggleEpisodeSort) && !isFiltering && len(m.episodes) > 0 {
+			m.toggleEpisodeSort()
+			m.syncDetailViewport(false)
 			return m, tea.Batch(cmds...)
 		}
 
@@ -378,12 +408,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.episodes = msg.episodes
 		m.selectedEpisode = nil
 
-		// Populate episode list with theme for badge styling
-		items := make([]list.Item, len(msg.episodes))
-		for i, episode := range msg.episodes {
-			items[i] = EpisodeItem{Episode: episode}.WithTheme(m.theme)
-		}
-		cmds = append(cmds, m.epList.SetItems(items))
+		m.rebuildEpisodeList()
 
 		m.syncDetailViewport(false)
 		return m, tea.Batch(cmds...)
@@ -440,6 +465,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.setStatus(fmt.Sprintf("Playing: %s", selected.Title()), "success")
 					// TODO: Wire up to PlayerService.PlayEpisode()
 				}
+			}
+
+			// Open "go to episode" modal when 'g' is pressed (skip if filtering)
+			if key.Matches(msg, m.keys.GoToEpisode) && m.epList.FilterState() != list.Filtering && m.state == stateBrowse {
+				m.openGoToEpisodeModal()
+				cmds = append(cmds, m.goToInput.Focus())
+				return m, tea.Batch(cmds...)
 			}
 		}
 
@@ -514,6 +546,51 @@ func (m Model) handleAddMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Model, te
 	return m, tea.Batch(cmds...)
 }
 
+func (m Model) handleGoToEpisodeMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.Close) {
+		m.state = stateBrowse
+		m.goToInput.Blur()
+		m.goToInput.Reset()
+		m.setStatus("Go to episode cancelled", "info")
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.Submit) {
+		value := strings.TrimSpace(m.goToInput.Value())
+		if value == "" {
+			m.setStatus("Episode number is required", "warning")
+			return m, tea.Batch(cmds...)
+		}
+
+		var num int
+		if _, err := fmt.Sscanf(value, "%d", &num); err != nil {
+			m.setStatus("Invalid episode number", "warning")
+			return m, tea.Batch(cmds...)
+		}
+
+		idx := num - 1
+		if idx < 0 || idx >= len(m.episodes) {
+			m.setStatus(fmt.Sprintf("Episode %d out of range (1-%d)", num, len(m.episodes)), "warning")
+			return m, tea.Batch(cmds...)
+		}
+
+		m.state = stateBrowse
+		m.goToInput.Blur()
+		m.goToInput.Reset()
+		m.epList.Select(idx)
+		m.selectedEpisode = &m.episodes[idx]
+		m.setStatus(fmt.Sprintf("Selected episode %d", num), "success")
+		return m, tea.Batch(cmds...)
+	}
+
+	var inputCmd tea.Cmd
+	m.goToInput, inputCmd = m.goToInput.Update(msg)
+	if inputCmd != nil {
+		cmds = append(cmds, inputCmd)
+	}
+	return m, tea.Batch(cmds...)
+}
+
 func (m *Model) resize() {
 	if m.width <= 0 || m.height <= 0 {
 		return
@@ -552,6 +629,7 @@ func (m *Model) resize() {
 	}
 
 	m.input.SetWidth(min(max(contentWidth-12, 20), 72))
+	m.goToInput.SetWidth(min(max(contentWidth-12, 20), 72))
 	m.syncDetailViewport(false)
 	m.syncGuideViewport(false)
 }
@@ -560,6 +638,12 @@ func (m *Model) openAddModal() {
 	m.state = stateAddPodcast
 	m.input.Reset()
 	m.input.Placeholder = "https://example.com/feed.xml"
+}
+
+func (m *Model) openGoToEpisodeModal() {
+	m.state = stateGoToEpisode
+	m.goToInput.Reset()
+	m.goToInput.Placeholder = "episode number"
 }
 
 func (m *Model) toggleFocus() {
@@ -577,6 +661,65 @@ func (m *Model) toggleFocus() {
 	}
 	m.focus = focusLibrary
 	m.setStatus("Podcast list focused.", "info")
+}
+
+func (m *Model) toggleEpisodeSort() {
+	if m.sortOrder == sortNewestFirst {
+		m.sortOrder = sortOldestFirst
+		m.setStatus("Sorting: oldest episodes first", "info")
+	} else {
+		m.sortOrder = sortNewestFirst
+		m.setStatus("Sorting: newest episodes first", "info")
+	}
+	m.rebuildEpisodeList()
+}
+
+func (m *Model) rebuildEpisodeList() {
+	sorted := make([]domain.Episode, len(m.episodes))
+	copy(sorted, m.episodes)
+
+	sortByPublishedAt(sorted, m.sortOrder == sortOldestFirst)
+
+	previousID := int64(0)
+	if m.selectedEpisode != nil {
+		previousID = m.selectedEpisode.ID
+	}
+
+	items := make([]list.Item, len(sorted))
+	for i, episode := range sorted {
+		items[i] = EpisodeItem{Episode: episode}.WithTheme(m.theme)
+	}
+	m.epList.SetItems(items)
+
+	m.episodes = sorted
+
+	if previousID > 0 {
+		for i, ep := range m.episodes {
+			if ep.ID == previousID {
+				m.epList.Select(i)
+				m.selectedEpisode = &m.episodes[i]
+				break
+			}
+		}
+	}
+}
+
+func sortByPublishedAt(episodes []domain.Episode, oldestFirst bool) {
+	sort.Slice(episodes, func(i, j int) bool {
+		if episodes[i].PublishedAt.IsZero() && episodes[j].PublishedAt.IsZero() {
+			return false
+		}
+		if episodes[i].PublishedAt.IsZero() {
+			return !oldestFirst
+		}
+		if episodes[j].PublishedAt.IsZero() {
+			return oldestFirst
+		}
+		if oldestFirst {
+			return episodes[i].PublishedAt.Before(episodes[j].PublishedAt)
+		}
+		return episodes[i].PublishedAt.After(episodes[j].PublishedAt)
+	})
 }
 
 func (m *Model) setStatus(text, kind string) {
@@ -602,6 +745,15 @@ func (m Model) View() tea.View {
 			max(m.width, 80),
 			max(m.height, 24),
 			m.renderAddModal(),
+		)
+	}
+
+	if m.state == stateGoToEpisode {
+		layout = components.RenderModal(
+			m.theme,
+			max(m.width, 80),
+			max(m.height, 24),
+			m.renderGoToEpisodeModal(),
 		)
 	}
 
@@ -838,6 +990,25 @@ func (m Model) renderAddModal() string {
 	return strings.Join(body, "\n\n")
 }
 
+func (m Model) renderGoToEpisodeModal() string {
+	inputStyle := m.theme.Input
+	if m.goToInput.Focused() {
+		inputStyle = m.theme.InputFocused
+	}
+
+	body := []string{
+		m.theme.SectionTitle.Render("Go to episode"),
+		m.theme.MutedText.Render(
+			fmt.Sprintf("Enter episode number (1-%d) to jump directly to it.", len(m.episodes)),
+		),
+		m.theme.Label.Render("Episode #"),
+		inputStyle.Render(m.goToInput.View()),
+		m.theme.MutedText.Render("Enter to go, Esc to cancel"),
+	}
+
+	return strings.Join(body, "\n\n")
+}
+
 func (m Model) renderFooter() string {
 	if m.state == stateHelp {
 		status := lipgloss.JoinHorizontal(lipgloss.Left,
@@ -895,6 +1066,8 @@ func (m Model) renderGuideContent(width int) string {
 		m.theme.Card.Width(wrapWidth).Render(strings.Join([]string{
 			m.theme.Label.Render("a") + "  Add a podcast feed",
 			m.theme.Label.Render("r") + "  Refresh selected podcast feed",
+			m.theme.Label.Render("g") + "  Go to episode by number (in detail pane)",
+			m.theme.Label.Render("s") + "  Toggle episode sort order (newest/oldest first)",
 			m.theme.Label.Render("tab") + "  Switch focus between the library and detail panes",
 			m.theme.Label.Render("enter") + "  Confirm actions in dialogs and list filtering",
 			m.theme.Label.Render("esc") + "  Close dialogs or leave this help page",
@@ -922,21 +1095,24 @@ func (m Model) renderGuideContent(width int) string {
 				"j/k",
 			) + " or arrow keys to navigate between episodes. The selected episode is highlighted with an accent border.",
 			"5. Press " + m.theme.Label.Render(
+				"g",
+			) + " to jump directly to an episode by number.",
+			"6. Press " + m.theme.Label.Render(
 				"enter",
 			) + " or " + m.theme.Label.Render(
 				"space",
 			) + " to play the selected episode.",
-			"6. Episodes show a " + lipgloss.NewStyle().
+			"7. Episodes show a " + lipgloss.NewStyle().
 				Foreground(m.theme.Success).
 				Bold(true).
 				Render("NEW") +
 				" indicator for unplayed episodes and a " + m.theme.MutedText.Render(
 				"PLAYED",
 			) + " indicator for played ones.",
-			"7. Press " + m.theme.Label.Render(
+			"8. Press " + m.theme.Label.Render(
 				"tab",
 			) + " again to return focus to the podcast list.",
-			"8. Press " + m.theme.Label.Render("?") + " any time to revisit this help page.",
+			"9. Press " + m.theme.Label.Render("?") + " any time to revisit this help page.",
 		}, "\n\n")),
 	}
 

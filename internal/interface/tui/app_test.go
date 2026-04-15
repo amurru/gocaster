@@ -364,3 +364,154 @@ func TestModelEpisodeTickDoesNotResetItemsWhenFilterApplied(t *testing.T) {
 			episodeCountBeforeTick, episodeCountAfterTick)
 	}
 }
+
+func TestModelToggleEpisodeSortFlipsState(t *testing.T) {
+	model := newTestModel(t)
+	podcast := domain.Podcast{
+		ID:      7,
+		Title:   "Syntax",
+		FeedURL: "https://example.com/feed.xml",
+	}
+	now := time.Now()
+	episodes := []domain.Episode{
+		{ID: 1, PodcastID: podcast.ID, Title: "Episode One", PublishedAt: now.Add(-2 * 24 * time.Hour)},
+		{ID: 2, PodcastID: podcast.ID, Title: "Episode Two", PublishedAt: now},
+		{ID: 3, PodcastID: podcast.ID, Title: "Episode Three", PublishedAt: now.Add(-1 * 24 * time.Hour)},
+	}
+
+	updated, _ := model.Update(podcastsLoadedMsg{podcasts: []domain.Podcast{podcast}})
+	current := updated.(Model)
+
+	updated, _ = current.Update(episodesLoadedMsg{podcastID: podcast.ID, episodes: episodes})
+	current = updated.(Model)
+
+	if current.sortOrder != sortNewestFirst {
+		t.Fatalf("expected default sort order %q, got %q", sortNewestFirst, current.sortOrder)
+	}
+
+	updated, _ = current.Update(keyMsg("s", 's'))
+	current = updated.(Model)
+
+	if current.sortOrder != sortOldestFirst {
+		t.Fatalf("expected sort order %q after toggle, got %q", sortOldestFirst, current.sortOrder)
+	}
+
+	if current.status != "Sorting: oldest episodes first" {
+		t.Fatalf("expected status 'Sorting: oldest episodes first', got %q", current.status)
+	}
+
+	updated, _ = current.Update(keyMsg("s", 's'))
+	current = updated.(Model)
+
+	if current.sortOrder != sortNewestFirst {
+		t.Fatalf("expected sort order %q after second toggle, got %q", sortNewestFirst, current.sortOrder)
+	}
+
+	if current.status != "Sorting: newest episodes first" {
+		t.Fatalf("expected status 'Sorting: newest episodes first', got %q", current.status)
+	}
+}
+
+func TestModelToggleEpisodeSortOrdersEpisodes(t *testing.T) {
+	model := newTestModel(t)
+	podcast := domain.Podcast{
+		ID:      7,
+		Title:   "Syntax",
+		FeedURL: "https://example.com/feed.xml",
+	}
+	now := time.Now()
+	episodes := []domain.Episode{
+		{ID: 1, PodcastID: podcast.ID, Title: "Episode One", PublishedAt: now.Add(-2 * 24 * time.Hour)},
+		{ID: 2, PodcastID: podcast.ID, Title: "Episode Two", PublishedAt: now},
+		{ID: 3, PodcastID: podcast.ID, Title: "Episode Three", PublishedAt: now.Add(-1 * 24 * time.Hour)},
+	}
+
+	updated, _ := model.Update(podcastsLoadedMsg{podcasts: []domain.Podcast{podcast}})
+	current := updated.(Model)
+
+	updated, _ = current.Update(episodesLoadedMsg{podcastID: podcast.ID, episodes: episodes})
+	current = updated.(Model)
+
+	firstItem := current.epList.Items()[0]
+	firstEp := firstItem.(EpisodeItem)
+	if firstEp.Title() != "Episode Two" {
+		t.Fatalf("expected first episode 'Episode Two' (newest), got %q", firstEp.Title())
+	}
+
+	updated, _ = current.Update(keyMsg("s", 's'))
+	current = updated.(Model)
+
+	firstItem = current.epList.Items()[0]
+	firstEp = firstItem.(EpisodeItem)
+	if firstEp.Title() != "Episode One" {
+		t.Fatalf("expected first episode 'Episode One' (oldest), got %q", firstEp.Title())
+	}
+}
+
+func TestModelToggleEpisodeSortIgnoredWhenNoEpisodes(t *testing.T) {
+	model := newTestModel(t)
+	podcast := domain.Podcast{
+		ID:      7,
+		Title:   "Syntax",
+		FeedURL: "https://example.com/feed.xml",
+	}
+
+	updated, _ := model.Update(podcastsLoadedMsg{podcasts: []domain.Podcast{podcast}})
+	current := updated.(Model)
+
+	updated, _ = current.Update(episodesLoadedMsg{podcastID: podcast.ID, episodes: []domain.Episode{}})
+	current = updated.(Model)
+
+	originalStatus := current.status
+
+	updated, _ = current.Update(keyMsg("s", 's'))
+	current = updated.(Model)
+
+	if current.sortOrder != sortNewestFirst {
+		t.Fatalf("expected sort order to remain %q when no episodes, got %q", sortNewestFirst, current.sortOrder)
+	}
+
+	if current.status == "Sorting: oldest episodes first" || current.status == "Sorting: newest episodes first" {
+		t.Fatalf("expected no sort status change when no episodes, got %q", current.status)
+	}
+
+	_ = originalStatus
+}
+
+func TestModelToggleEpisodeSortPreservesSelection(t *testing.T) {
+	model := newTestModel(t)
+	podcast := domain.Podcast{
+		ID:      7,
+		Title:   "Syntax",
+		FeedURL: "https://example.com/feed.xml",
+	}
+	now := time.Now()
+	episodes := []domain.Episode{
+		{ID: 1, PodcastID: podcast.ID, Title: "Episode One", PublishedAt: now.Add(-2 * 24 * time.Hour)},
+		{ID: 2, PodcastID: podcast.ID, Title: "Episode Two", PublishedAt: now},
+		{ID: 3, PodcastID: podcast.ID, Title: "Episode Three", PublishedAt: now.Add(-1 * 24 * time.Hour)},
+	}
+
+	updated, _ := model.Update(podcastsLoadedMsg{podcasts: []domain.Podcast{podcast}})
+	current := updated.(Model)
+
+	updated, _ = current.Update(episodesLoadedMsg{podcastID: podcast.ID, episodes: episodes})
+	current = updated.(Model)
+
+	current.epList.Select(1)
+	current.selectedEpisode = &current.episodes[1]
+
+	updated, _ = current.Update(keyMsg("s", 's'))
+	current = updated.(Model)
+
+	if current.selectedEpisode == nil || current.selectedEpisode.ID != 3 {
+		t.Fatalf("expected selected episode ID 3 (same as before sort), got %d", current.selectedEpisode.ID)
+	}
+
+	updated, _ = current.Update(keyMsg("s", 's'))
+	current = updated.(Model)
+
+	if current.selectedEpisode == nil || current.selectedEpisode.ID != 3 {
+		t.Fatalf("expected selected episode ID 3 after second toggle, got %d", current.selectedEpisode.ID)
+	}
+}
