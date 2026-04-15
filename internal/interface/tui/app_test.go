@@ -1,11 +1,13 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 	"github.com/amurru/gocaster/internal/application"
 	"github.com/amurru/gocaster/internal/domain"
 	"github.com/amurru/gocaster/internal/infrastructure/persistence"
@@ -85,6 +87,33 @@ func TestModelWindowResizeKeepsSplitPaneWidthsBounded(t *testing.T) {
 	total := resized.listWidth + resized.detailWidth + 1
 	if total > resized.contentWidth() {
 		t.Fatalf("expected split panes within content width %d, got total=%d", resized.contentWidth(), total)
+	}
+}
+
+func TestModelViewHeightStaysWithinWindowAfterResize(t *testing.T) {
+	model := newTestModel(t)
+
+	podcasts := make([]domain.Podcast, 30)
+	for i := range podcasts {
+		podcasts[i] = domain.Podcast{
+			ID:      int64(i + 1),
+			Title:   fmt.Sprintf("Podcast %d", i+1),
+			FeedURL: fmt.Sprintf("https://example.com/%d.xml", i+1),
+		}
+	}
+
+	updated, _ := model.Update(podcastsLoadedMsg{podcasts: podcasts})
+	current := updated.(Model)
+
+	windowHeight := 24
+	for i := 0; i < 6; i++ {
+		updated, _ = current.Update(tea.WindowSizeMsg{Width: 100, Height: windowHeight})
+		current = updated.(Model)
+
+		renderedHeight := lipgloss.Height(current.View().Content)
+		if renderedHeight > windowHeight {
+			t.Fatalf("expected rendered height <= %d after resize %d, got %d", windowHeight, i+1, renderedHeight)
+		}
 	}
 }
 

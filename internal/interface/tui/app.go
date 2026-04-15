@@ -80,10 +80,10 @@ type Model struct {
 	loadingDetail  bool
 	submitting     bool
 
-	focus            paneFocus
-	selectedPodcast  *domain.Podcast
-	episodes         []domain.Episode
-	selectedEpisode  *domain.Episode
+	focus           paneFocus
+	selectedPodcast *domain.Podcast
+	episodes        []domain.Episode
+	selectedEpisode *domain.Episode
 }
 
 func NewModel(svc *application.PodcastService) Model {
@@ -228,7 +228,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		// Keep the ticker running for badge flashing
 		cmds = append(cmds, tickCmd())
-		
+
 		// Update episode list items with flash tick
 		if len(m.episodes) > 0 {
 			flashTick := time.Now().Unix()
@@ -468,15 +468,20 @@ func (m *Model) resize() {
 
 	contentWidth := m.contentWidth()
 	m.help.SetWidth(max(contentWidth, 20))
-	helpHeight := lipgloss.Height(m.help.View(m.keys))
-	bodyHeight := max(m.height-helpHeight-6, 8)
-	m.bodyHeight = bodyHeight
 
+	appFrameHeight := m.theme.App.GetVerticalFrameSize()
+	headerHeight := lipgloss.Height(m.renderHeader())
+	footerHeight := lipgloss.Height(m.renderFooter())
+	bodyHeight := m.height - appFrameHeight - headerHeight - footerHeight
+	m.bodyHeight = max(bodyHeight, 1)
+
+	// These are now set inside the render methods, which have the final say
+	// on height, but we can still set the width here.
 	if m.shouldStackPanes() {
 		m.listWidth = max(contentWidth-4, 16)
 		m.detailWidth = max(contentWidth-4, 16)
-		m.detailHeight = max((bodyHeight-1)/2, 6)
-		m.list.SetSize(m.listWidth, max(bodyHeight/2, 6))
+		m.list.SetSize(m.listWidth, max((m.bodyHeight-1)/2, 1))
+		m.detailHeight = max(m.bodyHeight-max((m.bodyHeight-1)/2, 1)-1, 1)
 	} else {
 		gap := 1
 		leftWidth := max(contentWidth/3, 24)
@@ -488,9 +493,9 @@ func (m *Model) resize() {
 			leftWidth = max(contentWidth-rightWidth-gap, 24)
 		}
 		m.listWidth = max(leftWidth-4, 16)
+		m.list.SetSize(m.listWidth, max(m.bodyHeight, 1))
 		m.detailWidth = max(rightWidth-4, 16)
-		m.detailHeight = bodyHeight
-		m.list.SetSize(m.listWidth, bodyHeight)
+		m.detailHeight = max(m.bodyHeight, 1)
 	}
 
 	m.input.SetWidth(min(max(contentWidth-12, 20), 72))
@@ -577,28 +582,31 @@ func (m Model) renderHeader() string {
 
 func (m Model) renderContent() string {
 	if m.state == stateHelp {
-		return m.renderHelpPage()
+		return lipgloss.NewStyle().MaxHeight(max(m.bodyHeight, 1)).Render(m.renderHelpPage())
 	}
 
 	if m.loadingLibrary && len(m.list.Items()) == 0 {
-		return components.RenderLoading(m.theme, m.spin.View(), "Loading library…")
+		content := components.RenderLoading(m.theme, m.spin.View(), "Loading library…")
+		return lipgloss.NewStyle().MaxHeight(max(m.bodyHeight, 1)).Render(content)
 	}
 
 	left := m.renderPodcastPane()
 	right := m.renderDetailPane()
 
 	if m.shouldStackPanes() {
-		return lipgloss.JoinVertical(lipgloss.Left, left, right)
+		content := lipgloss.JoinVertical(lipgloss.Left, left, right)
+		return lipgloss.NewStyle().MaxHeight(max(m.bodyHeight, 1)).Render(content)
 	}
 
 	gap := " "
 	leftWidth := lipgloss.Width(left)
 	rightWidth := max(m.contentWidth()-leftWidth-lipgloss.Width(gap), 1)
-	return lipgloss.JoinHorizontal(lipgloss.Top,
+	content := lipgloss.JoinHorizontal(lipgloss.Top,
 		lipgloss.NewStyle().Width(leftWidth).MaxWidth(leftWidth).Render(left),
 		gap,
 		lipgloss.NewStyle().Width(rightWidth).MaxWidth(rightWidth).Render(right),
 	)
+	return lipgloss.NewStyle().MaxHeight(max(m.bodyHeight, 1)).Render(content)
 }
 
 func (m Model) renderHelpPage() string {
@@ -621,6 +629,13 @@ func (m Model) renderPodcastPane() string {
 	if m.focus == focusLibrary {
 		panel = m.theme.PanelFocused
 	}
+	paneHeight := max(m.bodyHeight, 1)
+	if m.shouldStackPanes() {
+		paneHeight = max((m.bodyHeight-1)/2, 1)
+	}
+	header := lipgloss.JoinVertical(lipgloss.Left, title, subtitle)
+	innerHeight := max(paneHeight-panel.GetVerticalFrameSize()-lipgloss.Height(header), 1)
+	m.list.SetSize(max(m.listWidth, 1), innerHeight)
 
 	body := m.list.View()
 	if len(m.list.Items()) == 0 && !m.loadingLibrary {
@@ -628,7 +643,9 @@ func (m Model) renderPodcastPane() string {
 	}
 
 	return panel.Width(max(m.listWidth+4, 20)).
-		Render(lipgloss.JoinVertical(lipgloss.Left, title, subtitle, body))
+		Height(paneHeight).
+		MaxHeight(paneHeight).
+		Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
 }
 
 func (m Model) renderDetailPane() string {
@@ -636,12 +653,13 @@ func (m Model) renderDetailPane() string {
 	if m.focus == focusDetail {
 		panel = m.theme.PanelFocused
 	}
+	paneHeight := max(m.detailHeight, 1)
 
 	title := m.theme.SectionTitle.Render("Details")
 	subtitle := m.theme.MutedText.Render("Selected show overview and recent episodes.")
 
 	if m.selectedPodcast == nil {
-		return panel.Render(lipgloss.JoinVertical(
+		return panel.Height(paneHeight).MaxHeight(paneHeight).Render(lipgloss.JoinVertical(
 			lipgloss.Left,
 			title,
 			subtitle,
@@ -651,7 +669,7 @@ func (m Model) renderDetailPane() string {
 		))
 	}
 
-	return panel.Width(max(m.detailWidth+4, 20)).Render(lipgloss.JoinVertical(lipgloss.Left,
+	return panel.Width(max(m.detailWidth+4, 20)).Height(paneHeight).MaxHeight(paneHeight).Render(lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		subtitle,
 		m.renderDetailContent(),
@@ -709,7 +727,7 @@ func (m Model) renderEpisodes() string {
 
 	// Set the size of the episode list and render it
 	m.epList.SetSize(max(m.detailPaneWidth(), 16), min(len(m.episodes), 8)*3+2)
-	
+
 	return m.epList.View()
 }
 
@@ -886,7 +904,7 @@ func (m Model) contentWidth() int {
 	if m.width <= 0 {
 		return 80
 	}
-	return max(m.width-4, 20)
+	return max(m.width-m.theme.App.GetHorizontalFrameSize(), 20)
 }
 
 func (m Model) shouldStackPanes() bool {
