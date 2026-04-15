@@ -1,6 +1,8 @@
 package application
 
 import (
+	"time"
+
 	"github.com/amurru/gocaster/internal/domain"
 )
 
@@ -53,4 +55,44 @@ func (s *PodcastService) GetPodcast(id int64) (*domain.Podcast, error) {
 
 func (s *PodcastService) ListEpisodes(podcastID int64) ([]domain.Episode, error) {
 	return s.repo.FindEpisodesByPodcastID(podcastID)
+}
+
+func (s *PodcastService) RefreshPodcast(podcastID int64) (int, error) {
+	podcast, err := s.repo.FindByID(podcastID)
+	if err != nil {
+		return 0, err
+	}
+
+	_, fetchedEpisodes, err := s.fetcher.Parse(podcast.FeedURL)
+	if err != nil {
+		return 0, err
+	}
+
+	existingEpisodes, err := s.repo.FindEpisodesByPodcastID(podcastID)
+	if err != nil {
+		return 0, err
+	}
+	existingUrls := make(map[string]bool)
+	for _, ep := range existingEpisodes {
+		existingUrls[ep.AudioURL] = true
+	}
+
+	newCount := 0
+	for i := range fetchedEpisodes {
+		if existingUrls[fetchedEpisodes[i].AudioURL] {
+			continue
+		}
+		fetchedEpisodes[i].PodcastID = podcastID
+		if err := s.repo.SaveEpisode(&fetchedEpisodes[i]); err != nil {
+			return newCount, err
+		}
+		newCount++
+	}
+
+	podcast.LastUpdated = time.Now()
+	if err := s.repo.Save(podcast); err != nil {
+		return newCount, err
+	}
+
+	return newCount, nil
 }

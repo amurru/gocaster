@@ -3,15 +3,16 @@ package tui
 import "charm.land/bubbles/v2/key"
 
 type keyMap struct {
-	Add           key.Binding
-	Submit        key.Binding
-	Close         key.Binding
-	SwitchPane    key.Binding
-	ToggleHelp    key.Binding
-	Quit          key.Binding
-	PlayEpisode   key.Binding
-	NextEpisode   key.Binding
-	PrevEpisode   key.Binding
+	Add            key.Binding
+	Submit         key.Binding
+	Close          key.Binding
+	SwitchPane     key.Binding
+	ToggleHelp     key.Binding
+	Quit           key.Binding
+	PlayEpisode    key.Binding
+	NextEpisode    key.Binding
+	PrevEpisode    key.Binding
+	RefreshPodcast key.Binding
 }
 
 func defaultKeyMap() keyMap {
@@ -52,16 +53,20 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("k", "up"),
 			key.WithHelp("k/↑", "prev episode"),
 		),
+		RefreshPodcast: key.NewBinding(
+			key.WithKeys("r"),
+			key.WithHelp("r", "refresh feed"),
+		),
 	}
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Add, k.SwitchPane, k.PlayEpisode, k.NextEpisode, k.PrevEpisode, k.Close, k.ToggleHelp, k.Quit}
+	return []key.Binding{k.Add, k.RefreshPodcast, k.SwitchPane, k.PlayEpisode, k.NextEpisode, k.PrevEpisode, k.Close, k.ToggleHelp, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Add, k.SwitchPane, k.PlayEpisode, k.NextEpisode, k.PrevEpisode},
+		{k.Add, k.RefreshPodcast, k.SwitchPane, k.PlayEpisode, k.NextEpisode, k.PrevEpisode},
 		{k.Submit, k.Close},
 		{k.ToggleHelp, k.Quit},
 	}

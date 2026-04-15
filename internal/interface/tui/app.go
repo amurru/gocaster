@@ -52,6 +52,12 @@ type episodesLoadedMsg struct {
 	err       error
 }
 
+type podcastRefreshedMsg struct {
+	podcastID int64
+	newCount  int
+	err       error
+}
+
 type Model struct {
 	podcastService *application.PodcastService
 
@@ -207,6 +213,13 @@ func (m Model) addPodcast(url string) tea.Cmd {
 	}
 }
 
+func (m Model) refreshPodcast(podcastID int64) tea.Cmd {
+	return func() tea.Msg {
+		newCount, err := m.podcastService.RefreshPodcast(podcastID)
+		return podcastRefreshedMsg{podcastID: podcastID, newCount: newCount, err: err}
+	}
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -291,6 +304,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		}
 
+		if key.Matches(msg, m.keys.RefreshPodcast) {
+			if m.selectedPodcast == nil {
+				m.setStatus("No podcast selected to refresh", "warning")
+				return m, tea.Batch(cmds...)
+			}
+			m.loadingDetail = true
+			m.setStatus("Refreshing feed…", "info")
+			cmds = append(cmds, m.refreshPodcast(m.selectedPodcast.ID), m.spin.Tick)
+			return m, tea.Batch(cmds...)
+		}
+
 	case podcastsLoadedMsg:
 		m.loadingLibrary = false
 		if msg.err != nil {
@@ -370,6 +394,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setStatus(fmt.Sprintf("Added %s", msg.podcast.Title), "success")
 		m.loadingLibrary = true
 		cmds = append(cmds, m.loadPodcasts(), m.spin.Tick)
+		return m, tea.Batch(cmds...)
+
+	case podcastRefreshedMsg:
+		m.loadingDetail = false
+		if msg.err != nil {
+			m.setStatus(fmt.Sprintf("Refresh failed: %v", msg.err), "error")
+			return m, tea.Batch(cmds...)
+		}
+
+		m.loadingDetail = true
+		m.loadingLibrary = true
+		cmds = append(cmds, m.loadPodcasts(), m.loadEpisodes(msg.podcastID), m.spin.Tick)
+
+		if msg.newCount > 0 {
+			m.setStatus(fmt.Sprintf("Added %d new episode%s", msg.newCount, suffix(msg.newCount)), "success")
+		} else {
+			m.setStatus("No new episodes", "info")
+		}
 		return m, tea.Batch(cmds...)
 
 	case errMsg:
@@ -826,6 +868,7 @@ func (m Model) renderGuideContent(width int) string {
 		m.theme.SectionTitle.Render("Shortcuts"),
 		m.theme.Card.Width(wrapWidth).Render(strings.Join([]string{
 			m.theme.Label.Render("a") + "  Add a podcast feed",
+			m.theme.Label.Render("r") + "  Refresh selected podcast feed",
 			m.theme.Label.Render("tab") + "  Switch focus between the library and detail panes",
 			m.theme.Label.Render("enter") + "  Confirm actions in dialogs and list filtering",
 			m.theme.Label.Render("esc") + "  Close dialogs or leave this help page",
@@ -917,6 +960,13 @@ func selectedEpisodeItem(listModel list.Model) *EpisodeItem {
 	}
 	episode := item
 	return &episode
+}
+
+func suffix(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func min(a, b int) int {

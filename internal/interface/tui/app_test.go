@@ -247,3 +247,29 @@ func TestModelPodcastSelectionLoadsEpisodes(t *testing.T) {
 		t.Fatalf("expected 1 episode, got %d", len(current.episodes))
 	}
 }
+
+func TestModelRefreshKeyTriggersRefreshCommand(t *testing.T) {
+	model := newTestModel(t)
+	podcast := domain.Podcast{
+		ID:      7,
+		Title:   "Syntax",
+		FeedURL: "https://example.com/feed.xml",
+	}
+
+	updated, _ := model.Update(podcastsLoadedMsg{podcasts: []domain.Podcast{podcast}})
+	current := updated.(Model)
+
+	updated, cmd := current.Update(keyMsg("r", 'r'))
+	current = updated.(Model)
+
+	if cmd == nil {
+		t.Fatal("expected refresh command when pressing r with selected podcast")
+	}
+
+	updated, _ = current.Update(podcastRefreshedMsg{podcastID: podcast.ID, newCount: 3})
+	current = updated.(Model)
+
+	if current.status != "Added 3 new episodes" {
+		t.Fatalf("expected status 'Added 3 new episodes', got %q", current.status)
+	}
+}

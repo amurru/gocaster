@@ -32,22 +32,31 @@ func (r *SQLiteRepo) Close() error {
 }
 
 func (r *SQLiteRepo) Save(podcast *domain.Podcast) error {
+	if podcast.ID == 0 {
+		query := `
+			INSERT INTO podcasts (title, feed_url, description, image_url, last_updated)
+			VALUES (?, ?, ?, ?, ?)
+		`
+		result, err := r.db.Exec(query, podcast.Title, podcast.FeedURL, podcast.Description, podcast.ImageURL, podcast.LastUpdated)
+		if err != nil {
+			return err
+		}
+
+		id, err := result.LastInsertId()
+		if err != nil {
+			return err
+		}
+
+		podcast.ID = id
+		return nil
+	}
+
 	query := `
-		INSERT INTO podcasts (title, feed_url, description, image_url, last_updated)
-		VALUES (?, ?, ?, ?, ?)
+		UPDATE podcasts SET title = ?, feed_url = ?, description = ?, image_url = ?, last_updated = ?
+		WHERE id = ?
 	`
-	result, err := r.db.Exec(query, podcast.Title, podcast.FeedURL, podcast.Description, podcast.ImageURL, podcast.LastUpdated)
-	if err != nil {
-		return err
-	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		return err
-	}
-
-	podcast.ID = id
-	return nil
+	_, err := r.db.Exec(query, podcast.Title, podcast.FeedURL, podcast.Description, podcast.ImageURL, podcast.LastUpdated, podcast.ID)
+	return err
 }
 
 func (r *SQLiteRepo) FindAll() ([]domain.Podcast, error) {
