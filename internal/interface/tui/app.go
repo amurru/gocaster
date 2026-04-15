@@ -711,32 +711,36 @@ func (m Model) renderDetailPane() string {
 
 	title := m.theme.SectionTitle.Render("Details")
 	subtitle := m.theme.MutedText.Render("Selected show overview and recent episodes.")
+	header := lipgloss.JoinVertical(lipgloss.Left, title, subtitle)
+	innerHeight := max(paneHeight-panel.GetVerticalFrameSize()-lipgloss.Height(header), 1)
 
 	if m.selectedPodcast == nil {
-		return panel.Height(paneHeight).MaxHeight(paneHeight).Render(lipgloss.JoinVertical(
-			lipgloss.Left,
-			title,
-			subtitle,
-			m.theme.MutedText.Render(
-				"Select a podcast to see its description and recent episodes.",
-			),
-		))
+		return panel.Width(max(m.detailWidth+4, 20)).
+			Height(paneHeight).
+			MaxHeight(paneHeight).
+			Render(lipgloss.JoinVertical(lipgloss.Left,
+				header,
+				m.theme.MutedText.Render(
+					"Select a podcast to see its description and recent episodes.",
+				),
+			))
 	}
 
 	return panel.Width(max(m.detailWidth+4, 20)).
 		Height(paneHeight).
 		MaxHeight(paneHeight).
 		Render(lipgloss.JoinVertical(lipgloss.Left,
-			title,
-			subtitle,
-			m.renderDetailContent(),
+			header,
+			m.renderDetailContent(innerHeight),
 		))
 }
 
-func (m Model) renderDetailContent() string {
+func (m Model) renderDetailContent(availableHeight int) string {
 	if m.selectedPodcast == nil {
 		return ""
 	}
+
+	wrapWidth := max(m.detailPaneWidth()-4, 16)
 
 	detailParts := []string{
 		m.theme.SectionTitle.Render(m.selectedPodcast.Title),
@@ -757,23 +761,39 @@ func (m Model) renderDetailContent() string {
 	if description == "" {
 		description = "No description available."
 	}
-	detailParts = append(
-		detailParts,
-		m.theme.Body.Render(lipgloss.Wrap(description, max(m.detailPaneWidth()-4, 16), "")),
-	)
+
+	descriptionWrapped := m.theme.Body.Render(lipgloss.Wrap(description, wrapWidth, ""))
+	descLines := lipgloss.Height(descriptionWrapped)
+
+	episodesHeading := m.theme.SectionTitle.Render("Recent Episodes")
+	episodesHeadingHeight := lipgloss.Height(episodesHeading)
+
+	minEpisodesHeight := 3
+
+	availableForDescription := availableHeight - episodesHeadingHeight - minEpisodesHeight
+	if availableForDescription < 1 {
+		availableForDescription = 1
+	}
+
+	if descLines > availableForDescription {
+		truncated := truncateLines(descriptionWrapped, availableForDescription)
+		descriptionWrapped = m.theme.Body.Render(truncated)
+	}
 
 	topCard := m.theme.Card.Width(max(m.detailPaneWidth(), 16)).
-		Render(strings.Join(detailParts, "\n"))
+		Render(strings.Join(detailParts, "\n") + "\n" + descriptionWrapped)
 
-	episodes := m.renderEpisodes()
+	episodesHeight := max(availableHeight-lipgloss.Height(topCard)-episodesHeadingHeight, minEpisodesHeight)
+	episodes := m.renderEpisodes(episodesHeight)
+
 	return lipgloss.JoinVertical(lipgloss.Left,
 		topCard,
-		m.theme.SectionTitle.Render("Recent Episodes"),
+		episodesHeading,
 		episodes,
 	)
 }
 
-func (m Model) renderEpisodes() string {
+func (m Model) renderEpisodes(availableHeight int) string {
 	if m.loadingDetail {
 		return components.RenderLoading(m.theme, m.spin.View(), "Loading episodes…")
 	}
@@ -782,8 +802,7 @@ func (m Model) renderEpisodes() string {
 		return m.theme.MutedText.Render("No stored episodes for this feed yet.")
 	}
 
-	// Set the size of the episode list and render it
-	m.epList.SetSize(max(m.detailPaneWidth(), 16), min(len(m.episodes), 8)*3+2)
+	m.epList.SetSize(max(m.detailPaneWidth(), 16), max(availableHeight, 3))
 
 	return m.epList.View()
 }
@@ -843,7 +862,7 @@ func (m *Model) syncDetailViewport(reset bool) {
 
 	m.detail.SetWidth(width)
 	m.detail.SetHeight(height)
-	m.detail.SetContent(m.renderDetailContent())
+	m.detail.SetContent(m.renderDetailContent(height))
 	if reset {
 		m.detail.GotoTop()
 	}
@@ -992,4 +1011,12 @@ func (m Model) contentWidth() int {
 
 func (m Model) shouldStackPanes() bool {
 	return m.contentWidth() < 80
+}
+
+func truncateLines(text string, maxLines int) string {
+	lines := strings.Split(text, "\n")
+	if len(lines) <= maxLines {
+		return text
+	}
+	return strings.Join(lines[:maxLines], "\n")
 }
