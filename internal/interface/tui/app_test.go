@@ -331,3 +331,36 @@ func TestModelPodcastListFilterWithSlash(t *testing.T) {
 		t.Fatal("expected podcast list to be in filter mode after pressing /")
 	}
 }
+
+func TestModelEpisodeTickDoesNotResetItemsWhenFilterApplied(t *testing.T) {
+	model := newTestModel(t)
+	podcast := domain.Podcast{
+		ID:      7,
+		Title:   "Syntax",
+		FeedURL: "https://example.com/feed.xml",
+	}
+	episodes := []domain.Episode{
+		{ID: 1, PodcastID: podcast.ID, Title: "Episode One - Introduction"},
+		{ID: 2, PodcastID: podcast.ID, Title: "Episode Two - Advanced Topics"},
+		{ID: 3, PodcastID: podcast.ID, Title: "Episode Three - Deep Dive"},
+	}
+
+	updated, _ := model.Update(podcastsLoadedMsg{podcasts: []domain.Podcast{podcast}})
+	_, _ = model.Update(episodesLoadedMsg{podcastID: podcast.ID, episodes: episodes})
+	current := updated.(Model)
+
+	current.focus = focusDetail
+	current.epList.SetFilterState(list.FilterApplied)
+
+	episodeCountBeforeTick := len(current.epList.Items())
+
+	updated, _ = current.Update(tickMsg{})
+	current = updated.(Model)
+
+	episodeCountAfterTick := len(current.epList.Items())
+
+	if episodeCountAfterTick != episodeCountBeforeTick {
+		t.Fatalf("expected episode count %d after tick when filter applied, got %d",
+			episodeCountBeforeTick, episodeCountAfterTick)
+	}
+}

@@ -247,8 +247,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Keep the ticker running for badge flashing
 		cmds = append(cmds, tickCmd())
 
-		// Update episode list items with flash tick
-		if len(m.episodes) > 0 {
+		// Update episode list items with flash tick (skip if filtering is active)
+		if len(m.episodes) > 0 && m.epList.FilterState() == list.Unfiltered {
 			flashTick := time.Now().Unix()
 			items := make([]list.Item, len(m.episodes))
 			for i, episode := range m.episodes {
