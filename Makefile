@@ -54,5 +54,10 @@ clean: clean-test
 	@echo "Cleaning..."
 	@rm -f bin/gocaster
 
-.PHONY: all build run test test-coverage lint format vet check clean clean-test
+# Install the binary
+install:
+	@echo "Installing..."
+	@go install ./cmd/gocaster/
+
+.PHONY: all build run test test-coverage lint format vet check clean clean-test install
 
