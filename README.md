@@ -1,5 +1,7 @@
 # Gocaster
 
+![Gocaster Screenshot](assets/screenshot.png)
+
 Gocaster is a lightweight, terminal-based podcast client written in Go using the Bubble Tea TUI framework.
 
 This repository contains the application, adapters for persistence and playback, and a Bubble Tea-based TUI so you can browse, subscribe, and play podcast episodes from your terminal.
