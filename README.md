@@ -44,16 +44,30 @@ This repository contains the application, adapters for persistence and playback,
 - Vet: make vet
 - Full quality check: make check
 
-### Database
+### Configuration
 
-The app uses an SQLite database (gocaster.db) created on first run. Schema is managed by the SQLite repository implementation under internal/infrastructure. If you need to reset the database, remove gocaster.db from the working directory and restart the app.
+Gocaster reads configuration from a TOML file. The default config file location is:
+- Linux: `~/.config/gocaster/gocaster.toml` (or `$XDG_CONFIG_HOME/gocaster/gocaster.toml` if set)
 
-## Usage
+If the config file doesn't exist, it will be created automatically with default values.
 
-- Start the app and use the interactive TUI to add podcast feeds, browse episodes, and control playback.
-- Inline filtering: press `/` to start filtering lists (library and episode lists support filtering by title).
+**Config options:**
 
-## Configuration
+| Option | Default | Description |
+|--------|---------|-------------|
+| `database_path` | `~/.local/state/gocaster/gocaster.db` | Full path to SQLite database |
+| `download_path` | `~/.local/state/gocaster/downloads` | Full path to download directory |
+
+**Example config:**
+
+```toml
+database_path = "/home/user/my-podcasts.db"
+download_path = "/home/user/Downloads/Podcasts"
+```
+
+You can use `~` in paths (e.g., `~/Downloads`), which will be expanded to your home directory.
+
+If a path is not absolute (after resolving `~`), the default will be used and a warning will be logged.
 
 - MPV: ensure mpv is installed and available in PATH for the MPV player adapter to work. If you prefer another player, implement the Player domain port and wire it in cmd/gocaster.
 

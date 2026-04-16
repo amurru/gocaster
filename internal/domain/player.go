@@ -34,3 +34,32 @@ type Player interface {
 
 	Close() error
 }
+
+type PlaybackMetadata struct {
+	EpisodeTitle  string
+	PodcastTitle  string
+	Source        string
+	DurationSec   float64
+	PositionSec   float64
+	CanSeek       bool
+	CanGoNext     bool
+	CanGoPrevious bool
+}
+
+type PlaybackController interface {
+	Play(episodeID int64) error
+	Pause() error
+	Resume() error
+	PlayPause() error
+	Stop() error
+	SeekTo(positionSec float64) error
+	Status() (PlaybackStatus, error)
+}
+
+type PlaybackBroadcaster interface {
+	PublishState(state PlaybackState, metadata PlaybackMetadata) error
+	PublishPosition(positionSec float64, durationSec float64) error
+	Close() error
+
+	SetController(controller PlaybackController)
+}

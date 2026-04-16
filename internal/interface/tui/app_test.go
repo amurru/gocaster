@@ -76,7 +76,7 @@ func newTestModel(t *testing.T) Model {
 	podcastService := application.NewPodcastService(repo, tuiMockFeedParser{})
 	downloadService := application.NewDownloadService(repo, "downloads")
 	mockPlayer := &tuiMockPlayer{}
-	playerService := application.NewPlayerService(repo, mockPlayer)
+	playerService := application.NewPlayerService(repo, mockPlayer, nil)
 	return NewModel(podcastService, downloadService, playerService)
 }
 

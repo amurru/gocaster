@@ -7,9 +7,11 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/amurru/gocaster/internal/application"
+	"github.com/amurru/gocaster/internal/infrastructure/config"
 	"github.com/amurru/gocaster/internal/infrastructure/persistence"
 	"github.com/amurru/gocaster/internal/infrastructure/player"
 	"github.com/amurru/gocaster/internal/infrastructure/rss"
+	"github.com/amurru/gocaster/internal/infrastructure/system"
 	"github.com/amurru/gocaster/internal/interface/tui"
 )
 
@@ -22,24 +24,32 @@ func main() {
 		}
 		defer f.Close()
 	}
-	dbPath := "gocaster.db" // TODO: make configurable
-	repo, err := persistence.NewSQLiteRepo(dbPath)
+
+	cfg, err := config.LoadOrCreate()
+	if err != nil {
+		log.Fatal("fatal: ", err)
+	}
+
+	if err := config.EnsureDirs(cfg); err != nil {
+		log.Fatal("fatal: ", err)
+	}
+
+	repo, err := persistence.NewSQLiteRepo(cfg.DatabasePath)
 	if err != nil {
 		log.Fatal("fatal: ", err)
 	}
 	fetcher := rss.NewFeedFetcher()
 	podcastSvc := application.NewPodcastService(repo, fetcher)
 
-	// Ensure downloads directory exists
-	downloadDir := "downloads"
-	if err := os.MkdirAll(downloadDir, 0755); err != nil {
-		log.Fatal("fatal: ", err)
-	}
-	downloadSvc := application.NewDownloadService(repo, downloadDir)
+	downloadSvc := application.NewDownloadService(repo, cfg.DownloadPath)
 
-	// Setup player
+	// Setup player and broadcaster
 	mpvPlayer := player.NewMPVPlayer()
-	playerSvc := application.NewPlayerService(repo, mpvPlayer)
+	broadcaster, err := system.NewMPRISBroadcaster()
+	if err != nil {
+		log.Printf("Warning: failed to create MPRIS broadcaster: %v", err)
+	}
+	playerSvc := application.NewPlayerService(repo, mpvPlayer, broadcaster)
 
 	// UI model
 	model := tui.NewModel(podcastSvc, downloadSvc, playerSvc)
