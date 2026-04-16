@@ -24,6 +24,46 @@ func (m tuiMockFeedParser) Parse(string) (*domain.Podcast, []domain.Episode, err
 	return m.podcast, m.episodes, m.err
 }
 
+type tuiMockPlayer struct {
+	playErr error
+}
+
+func (m *tuiMockPlayer) Play(source string) error {
+	return m.playErr
+}
+
+func (m *tuiMockPlayer) Stop() error {
+	return nil
+}
+
+func (m *tuiMockPlayer) IsPlaying() bool {
+	return false
+}
+
+func (m *tuiMockPlayer) Pause() error {
+	return nil
+}
+
+func (m *tuiMockPlayer) Resume() error {
+	return nil
+}
+
+func (m *tuiMockPlayer) TogglePause() error {
+	return nil
+}
+
+func (m *tuiMockPlayer) Seek(seconds float64) error {
+	return nil
+}
+
+func (m *tuiMockPlayer) Status() (domain.PlaybackStatus, error) {
+	return domain.PlaybackStatus{}, nil
+}
+
+func (m *tuiMockPlayer) Close() error {
+	return nil
+}
+
 func newTestModel(t *testing.T) Model {
 	t.Helper()
 
@@ -35,7 +75,9 @@ func newTestModel(t *testing.T) Model {
 
 	podcastService := application.NewPodcastService(repo, tuiMockFeedParser{})
 	downloadService := application.NewDownloadService(repo, "downloads")
-	return NewModel(podcastService, downloadService)
+	mockPlayer := &tuiMockPlayer{}
+	playerService := application.NewPlayerService(repo, mockPlayer)
+	return NewModel(podcastService, downloadService, playerService)
 }
 
 func keyMsg(text string, code rune) tea.KeyPressMsg {

@@ -1,14 +1,36 @@
 package domain
 
-// Player is the "Port" for audio playback capabilities.
-// The Application layer uses this to control media without knowing if it's MPV, VLC, or internal.
+type PlaybackState string
+
+const (
+	PlaybackStateStopped PlaybackState = "stopped"
+	PlaybackStatePlaying PlaybackState = "playing"
+	PlaybackStatePaused  PlaybackState = "paused"
+	PlaybackStateError   PlaybackState = "error"
+)
+
+type PlaybackStatus struct {
+	State       PlaybackState
+	PositionSec float64
+	DurationSec float64
+	ProgressPct float64
+	Source      string
+	CanSeek     bool
+	LastError   string
+}
+
 type Player interface {
-	// Play starts playback of the given media (file path or URL)
-	Play(mediaPath string) error
-
-	// Stop halts playback
+	Play(source string) error
 	Stop() error
-
-	// IsPlaying returns the current state.
 	IsPlaying() bool
+
+	Pause() error
+	Resume() error
+	TogglePause() error
+
+	Seek(seconds float64) error
+
+	Status() (PlaybackStatus, error)
+
+	Close() error
 }

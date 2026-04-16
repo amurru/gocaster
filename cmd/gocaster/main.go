@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/amurru/gocaster/internal/application"
 	"github.com/amurru/gocaster/internal/infrastructure/persistence"
+	"github.com/amurru/gocaster/internal/infrastructure/player"
 	"github.com/amurru/gocaster/internal/infrastructure/rss"
 	"github.com/amurru/gocaster/internal/interface/tui"
 )
@@ -36,12 +37,17 @@ func main() {
 	}
 	downloadSvc := application.NewDownloadService(repo, downloadDir)
 
+	// Setup player
+	mpvPlayer := player.NewMPVPlayer()
+	playerSvc := application.NewPlayerService(repo, mpvPlayer)
+
 	// UI model
-	model := tui.NewModel(podcastSvc, downloadSvc)
+	model := tui.NewModel(podcastSvc, downloadSvc, playerSvc)
 	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("[☠️] there's been an error: %v", err)
 		os.Exit(1)
 	}
+	_ = playerSvc.Close()
 	tea.Quit()
 }

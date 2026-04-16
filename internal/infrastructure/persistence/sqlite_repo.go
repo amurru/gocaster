@@ -189,6 +189,11 @@ func (r *SQLiteRepo) FindEpisodeByID(id int64) (*domain.Episode, error) {
 	return &e, nil
 }
 
+func (r *SQLiteRepo) UpdateEpisodePlaybackState(id int64, isPlayed bool) error {
+	_, err := r.db.Exec(`UPDATE episodes SET is_played = ? WHERE id = ?`, isPlayed, id)
+	return err
+}
+
 func (r *SQLiteRepo) SaveDownloadJob(job *domain.DownloadJob) error {
 	query := `
 		INSERT INTO downloads (episode_id, status, bytes_downloaded, bytes_total, temp_path, final_path, etag, last_modified, supports_resume, error_message)

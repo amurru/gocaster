@@ -89,9 +89,20 @@ type downloadRetriedMsg struct {
 	err   error
 }
 
+type episodePlayedMsg struct {
+	episodeID int64
+	err       error
+}
+
+type playbackStatusMsg struct {
+	status domain.PlaybackStatus
+	err    error
+}
+
 type Model struct {
 	podcastService  *application.PodcastService
 	downloadService *application.DownloadService
+	playerService   *application.PlayerService
 
 	state     viewState
 	keys      keyMap
@@ -127,9 +138,11 @@ type Model struct {
 
 	downloadJobs []domain.DownloadJob
 	queueList    list.Model
+
+	playbackStatus domain.PlaybackStatus
 }
 
-func NewModel(svc *application.PodcastService, dsvc *application.DownloadService) Model {
+func NewModel(svc *application.PodcastService, dsvc *application.DownloadService, psvc *application.PlayerService) Model {
 	theme := styles.NewTheme()
 	delegate := components.NewPodcastDelegate(theme)
 	episodeDelegate := components.NewEpisodeDelegate(theme)
@@ -226,6 +239,7 @@ func NewModel(svc *application.PodcastService, dsvc *application.DownloadService
 	return Model{
 		podcastService:  svc,
 		downloadService: dsvc,
+		playerService:   psvc,
 		state:           stateBrowse,
 		keys:            defaultKeyMap(),
 		theme:           theme,
@@ -319,6 +333,20 @@ func (m Model) retryDownload(jobID int64) tea.Cmd {
 	}
 }
 
+func (m Model) playEpisode(episodeID int64) tea.Cmd {
+	return func() tea.Msg {
+		err := m.playerService.PlayEpisode(episodeID)
+		return episodePlayedMsg{episodeID: episodeID, err: err}
+	}
+}
+
+func (m Model) fetchPlaybackStatus() tea.Cmd {
+	return func() tea.Msg {
+		status, err := m.playerService.PlaybackStatus()
+		return playbackStatusMsg{status: status, err: err}
+	}
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -340,6 +368,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		// Keep the ticker running for badge flashing
 		cmds = append(cmds, tickCmd())
+
+		// Update playback status periodically
+		if m.playerService != nil {
+			cmds = append(cmds, m.fetchPlaybackStatus())
+		}
 
 		// Update episode list items with flash tick (skip if filtering is active)
 		if len(m.episodes) > 0 && m.epList.FilterState() == list.Unfiltered {
@@ -597,6 +630,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		cmds = append(cmds, m.loadDownloadJobs())
 		return m, tea.Batch(cmds...)
+
+	case episodePlayedMsg:
+		if msg.err != nil {
+			m.setStatus(fmt.Sprintf("Playback failed: %v", msg.err), "error")
+		} else {
+			m.setStatus("Playing episode", "success")
+			cmds = append(cmds, m.fetchPlaybackStatus())
+		}
+		return m, tea.Batch(cmds...)
+
+	case playbackStatusMsg:
+		if msg.err == nil {
+			m.playbackStatus = msg.status
+		}
+		return m, tea.Batch(cmds...)
 	}
 
 	if m.focus == focusDetail {
@@ -610,8 +658,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg, ok := msg.(tea.KeyPressMsg); ok {
 			if key.Matches(msg, m.keys.PlayEpisode) && m.epList.FilterState() != list.Filtering {
 				if selected := selectedEpisodeItem(m.epList); selected != nil {
-					m.setStatus(fmt.Sprintf("Playing: %s", selected.Title()), "success")
-					// TODO: Wire up to PlayerService.PlayEpisode()
+					cmds = append(cmds, m.playEpisode(selected.ID))
 				}
 			}
 

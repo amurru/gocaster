@@ -11,6 +11,7 @@ type PodcastRepository interface {
 	SaveEpisode(episode *Episode) error
 	FindEpisodesByPodcastID(id int64) ([]Episode, error)
 	FindEpisodeByID(id int64) (*Episode, error)
+	UpdateEpisodePlaybackState(id int64, isPlayed bool) error
 	DeleteEpisode(id int64) error
 
 	// Download Jobs

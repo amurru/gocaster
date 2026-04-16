@@ -247,6 +247,8 @@ func (s *DownloadService) runDownload(jobID int64) {
 	}
 	if ext := extractExtension(url, contentType); extFromURL || ext != ".audio" {
 		filename = safeName + ext
+		partPath = filepath.Join(s.downloadDir, filename+".part")
+		finalPath = filepath.Join(s.downloadDir, filename)
 	}
 
 	if resp.StatusCode == http.StatusPartialContent {
