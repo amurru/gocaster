@@ -12,6 +12,8 @@ This repository contains the application, adapters for persistence and playback,
 - RSS/Atom feed parsing via github.com/mmcdole/gofeed
 - SQLite persistence (github.com/mattn/go-sqlite3)
 - MPV adapter for audio playback (using go-mpv bindings; mpv must be installed separately)
+- MPRIS support for desktop media controls (Linux)
+- Download queue with episode downloading
 - Clean architecture: domain, application, infrastructure, interface layers
 
 ## Contents
