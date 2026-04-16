@@ -1281,8 +1281,11 @@ func (m Model) renderFooter() string {
 	status := lipgloss.JoinHorizontal(lipgloss.Left,
 		m.theme.StatusStyle(m.kind).Render(m.status),
 	)
-	helpView := m.theme.HelpText.Render(m.help.View(m.keys))
-	return lipgloss.JoinVertical(lipgloss.Left, status, helpView)
+
+	shortcuts := m.keys.FooterShortcuts(string(m.state), string(m.focus))
+	helpView := m.theme.HelpText.Render(m.help.ShortHelpView(shortcuts))
+	overflowHint := m.theme.HelpText.Render(" · ? for all")
+	return lipgloss.JoinVertical(lipgloss.Left, status, helpView+overflowHint)
 }
 
 func (m Model) detailPaneWidth() int {

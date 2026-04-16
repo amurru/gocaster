@@ -50,7 +50,7 @@ func defaultKeyMap() keyMap {
 		),
 		PlayEpisode: key.NewBinding(
 			key.WithKeys("enter", " "),
-			key.WithHelp("enter/space", "play episode"),
+			key.WithHelp("enter/space", "play"),
 		),
 		NextEpisode: key.NewBinding(
 			key.WithKeys("j", "down"),
@@ -62,15 +62,15 @@ func defaultKeyMap() keyMap {
 		),
 		RefreshPodcast: key.NewBinding(
 			key.WithKeys("r"),
-			key.WithHelp("r", "refresh feed"),
+			key.WithHelp("r", "refresh"),
 		),
 		Filter: key.NewBinding(
 			key.WithKeys("/"),
-			key.WithHelp("/", "filter list"),
+			key.WithHelp("/", "filter"),
 		),
 		GoToEpisode: key.NewBinding(
 			key.WithKeys("g"),
-			key.WithHelp("g", "go to episode"),
+			key.WithHelp("g", "go to"),
 		),
 		ToggleEpisodeSort: key.NewBinding(
 			key.WithKeys("s"),
@@ -78,7 +78,7 @@ func defaultKeyMap() keyMap {
 		),
 		DownloadQueue: key.NewBinding(
 			key.WithKeys("D"),
-			key.WithHelp("D", "download queue"),
+			key.WithHelp("D", "downloads"),
 		),
 		DownloadEpisode: key.NewBinding(
 			key.WithKeys("d"),
@@ -96,12 +96,68 @@ func defaultKeyMap() keyMap {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Add, k.RefreshPodcast, k.GoToEpisode, k.ToggleEpisodeSort, k.DownloadQueue, k.SwitchPane, k.PlayEpisode, k.NextEpisode, k.PrevEpisode, k.Filter, k.Close, k.ToggleHelp, k.Quit}
+	return []key.Binding{
+		k.Add,
+		k.RefreshPodcast,
+		k.GoToEpisode,
+		k.ToggleEpisodeSort,
+		k.DownloadQueue,
+		k.SwitchPane,
+		k.PlayEpisode,
+		k.NextEpisode,
+		k.PrevEpisode,
+		k.Filter,
+		k.Close,
+		k.ToggleHelp,
+		k.Quit,
+	}
+}
+
+func (k keyMap) FooterShortcuts(state string, focus string) []key.Binding {
+	switch state {
+	case "downloads":
+		return []key.Binding{k.Close, k.StartDownload, k.RetryDownload, k.ToggleHelp, k.Quit}
+	case "help":
+		return []key.Binding{k.Close, k.ToggleHelp}
+	default:
+		if focus == "detail" {
+			return []key.Binding{
+				k.SwitchPane,
+				k.ToggleEpisodeSort,
+				k.DownloadEpisode,
+				k.GoToEpisode,
+				k.PlayEpisode,
+				k.Filter,
+				k.ToggleHelp,
+				k.Quit,
+			}
+		}
+		return []key.Binding{
+			k.Add,
+			k.RefreshPodcast,
+			k.SwitchPane,
+			k.DownloadQueue,
+			k.Filter,
+			k.ToggleHelp,
+			k.Quit,
+		}
+	}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Add, k.RefreshPodcast, k.GoToEpisode, k.ToggleEpisodeSort, k.DownloadQueue, k.SwitchPane, k.PlayEpisode, k.NextEpisode, k.PrevEpisode, k.Filter},
+		{
+			k.Add,
+			k.RefreshPodcast,
+			k.GoToEpisode,
+			k.ToggleEpisodeSort,
+			k.DownloadQueue,
+			k.SwitchPane,
+			k.PlayEpisode,
+			k.NextEpisode,
+			k.PrevEpisode,
+			k.Filter,
+		},
 		{k.Submit, k.Close},
 		{k.ToggleHelp, k.Quit},
 	}
