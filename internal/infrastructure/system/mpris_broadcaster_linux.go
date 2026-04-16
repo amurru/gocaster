@@ -85,7 +85,7 @@ type noOpBroadcaster struct{}
 func NewMPRISBroadcaster() (domain.PlaybackBroadcaster, error) {
 	conn, err := dbus.SessionBus()
 	if err != nil {
-		return &noOpBroadcaster{}, nil
+		return &noOpBroadcaster{}, fmt.Errorf("connect to D-Bus session bus: %w", err)
 	}
 
 	b := &mprisBroadcaster{
@@ -95,7 +95,7 @@ func NewMPRISBroadcaster() (domain.PlaybackBroadcaster, error) {
 
 	if err := b.setup(); err != nil {
 		b.conn.Close()
-		return &noOpBroadcaster{}, nil
+		return &noOpBroadcaster{}, fmt.Errorf("setup MPRIS service: %w", err)
 	}
 
 	go b.positionUpdater()
@@ -119,9 +119,12 @@ func (b *noOpBroadcaster) SetController(controller domain.PlaybackController) {
 }
 
 func (b *mprisBroadcaster) setup() error {
-	_, err := b.conn.RequestName(mprisBusName, dbus.NameFlagAllowReplacement)
+	reply, err := b.conn.RequestName(mprisBusName, dbus.NameFlagAllowReplacement|dbus.NameFlagDoNotQueue)
 	if err != nil {
 		return err
+	}
+	if reply != dbus.RequestNameReplyPrimaryOwner && reply != dbus.RequestNameReplyAlreadyOwner {
+		return fmt.Errorf("failed to own %s (reply=%d)", mprisBusName, reply)
 	}
 
 	if err := b.conn.Export(b, mprisObjectPath, mprisInterface); err != nil {
@@ -157,16 +160,27 @@ func (b *mprisBroadcaster) positionUpdater() {
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
-	for b.running {
+	for {
 		<-ticker.C
+
 		b.mu.Lock()
-		if b.state == domain.PlaybackStatePlaying && b.controller != nil {
-			status, err := b.controller.Status()
-			if err == nil {
-				b.PublishPosition(status.PositionSec, status.DurationSec)
-			}
+		if !b.running {
+			b.mu.Unlock()
+			return
 		}
+
+		state := b.state
+		ctrl := b.controller
 		b.mu.Unlock()
+
+		if state != domain.PlaybackStatePlaying || ctrl == nil {
+			continue
+		}
+
+		status, err := ctrl.Status()
+		if err == nil {
+			_ = b.PublishPosition(status.PositionSec, status.DurationSec)
+		}
 	}
 }
 
@@ -184,7 +198,7 @@ func (b *mprisBroadcaster) PublishState(state domain.PlaybackState, metadata dom
 	b.metadata = metadata
 
 	playbackStatus := map[string]dbus.Variant{
-		"PlaybackStatus": dbus.MakeVariant(string(state)),
+		"PlaybackStatus": dbus.MakeVariant(toMPRISPlaybackStatus(state)),
 		"Rate":           dbus.MakeVariant(1.0),
 		"MinimumRate":    dbus.MakeVariant(1.0),
 		"MaximumRate":    dbus.MakeVariant(1.0),
@@ -238,7 +252,9 @@ func (b *mprisBroadcaster) PublishPosition(positionSec float64, durationSec floa
 }
 
 func (b *mprisBroadcaster) Close() error {
+	b.mu.Lock()
 	b.running = false
+	b.mu.Unlock()
 	if b.conn != nil {
 		b.conn.ReleaseName(mprisBusName)
 		return b.conn.Close()
@@ -263,7 +279,7 @@ func (b *mprisBroadcaster) GetAll(iface string) (map[string]dbus.Variant, *dbus.
 		props["SupportedUriSchemes"] = dbus.MakeVariant([]string{"https", "file"})
 		props["SupportedMimeTypes"] = dbus.MakeVariant([]string{})
 	case playerInterface:
-		props["PlaybackStatus"] = dbus.MakeVariant(string(b.state))
+		props["PlaybackStatus"] = dbus.MakeVariant(toMPRISPlaybackStatus(b.state))
 		props["Rate"] = dbus.MakeVariant(1.0)
 		props["MinimumRate"] = dbus.MakeVariant(1.0)
 		props["MaximumRate"] = dbus.MakeVariant(1.0)
@@ -307,9 +323,19 @@ func (b *mprisBroadcaster) Raise() *dbus.Error {
 
 func (b *mprisBroadcaster) Play() *dbus.Error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.controller != nil {
-		if err := b.controller.Play(0); err != nil {
+	ctrl := b.controller
+	b.mu.Unlock()
+
+	if ctrl != nil {
+		status, err := ctrl.Status()
+		if err == nil && status.State == domain.PlaybackStatePaused {
+			if err := ctrl.Resume(); err != nil {
+				return dbus.NewError("org.mpris.MediaPlayer2.Error", []interface{}{err.Error()})
+			}
+			return nil
+		}
+
+		if err := ctrl.Play(0); err != nil {
 			return dbus.NewError("org.mpris.MediaPlayer2.Error", []interface{}{err.Error()})
 		}
 	}
@@ -318,9 +344,10 @@ func (b *mprisBroadcaster) Play() *dbus.Error {
 
 func (b *mprisBroadcaster) Pause() *dbus.Error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.controller != nil {
-		if err := b.controller.Pause(); err != nil {
+	ctrl := b.controller
+	b.mu.Unlock()
+	if ctrl != nil {
+		if err := ctrl.Pause(); err != nil {
 			return dbus.NewError("org.mpris.MediaPlayer2.Error", []interface{}{err.Error()})
 		}
 	}
@@ -329,9 +356,10 @@ func (b *mprisBroadcaster) Pause() *dbus.Error {
 
 func (b *mprisBroadcaster) PlayPause() *dbus.Error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.controller != nil {
-		if err := b.controller.PlayPause(); err != nil {
+	ctrl := b.controller
+	b.mu.Unlock()
+	if ctrl != nil {
+		if err := ctrl.PlayPause(); err != nil {
 			return dbus.NewError("org.mpris.MediaPlayer2.Error", []interface{}{err.Error()})
 		}
 	}
@@ -340,9 +368,10 @@ func (b *mprisBroadcaster) PlayPause() *dbus.Error {
 
 func (b *mprisBroadcaster) Stop() *dbus.Error {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.controller != nil {
-		if err := b.controller.Stop(); err != nil {
+	ctrl := b.controller
+	b.mu.Unlock()
+	if ctrl != nil {
+		if err := ctrl.Stop(); err != nil {
 			return dbus.NewError("org.mpris.MediaPlayer2.Error", []interface{}{err.Error()})
 		}
 	}
@@ -351,10 +380,11 @@ func (b *mprisBroadcaster) Stop() *dbus.Error {
 
 func (b *mprisBroadcaster) Seek(to int64) (int64, *dbus.Error) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.controller != nil {
+	ctrl := b.controller
+	b.mu.Unlock()
+	if ctrl != nil {
 		positionSec := float64(to) / 1e6
-		if err := b.controller.SeekTo(positionSec); err != nil {
+		if err := ctrl.SeekTo(positionSec); err != nil {
 			return 0, dbus.NewError("org.mpris.MediaPlayer2.Error", []interface{}{err.Error()})
 		}
 	}
@@ -379,3 +409,14 @@ func (b *mprisBroadcaster) Introspect() string {
 }
 
 func (b *mprisBroadcaster) Ping() {}
+
+func toMPRISPlaybackStatus(state domain.PlaybackState) string {
+	switch state {
+	case domain.PlaybackStatePlaying:
+		return "Playing"
+	case domain.PlaybackStatePaused:
+		return "Paused"
+	default:
+		return "Stopped"
+	}
+}
