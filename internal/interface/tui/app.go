@@ -142,7 +142,11 @@ type Model struct {
 	playbackStatus domain.PlaybackStatus
 }
 
-func NewModel(svc *application.PodcastService, dsvc *application.DownloadService, psvc *application.PlayerService) Model {
+func NewModel(
+	svc *application.PodcastService,
+	dsvc *application.DownloadService,
+	psvc *application.PlayerService,
+) Model {
 	theme := styles.NewTheme()
 	delegate := components.NewPodcastDelegate(theme)
 	episodeDelegate := components.NewEpisodeDelegate(theme)
@@ -385,11 +389,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		// Update download queue progress (skip if filtering is active)
-		if m.state == stateDownloads && len(m.downloadJobs) > 0 && m.queueList.FilterState() == list.Unfiltered {
+		if m.state == stateDownloads && len(m.downloadJobs) > 0 &&
+			m.queueList.FilterState() == list.Unfiltered {
 			flashTick := time.Now().Unix()
 			items := make([]list.Item, len(m.downloadJobs))
 			for i, job := range m.downloadJobs {
-				items[i] = DownloadJobItem{DownloadJob: job}.WithTheme(m.theme).WithFlashTick(flashTick)
+				items[i] = DownloadJobItem{
+					DownloadJob: job,
+				}.WithTheme(m.theme).
+					WithFlashTick(flashTick)
 			}
 			cmds = append(cmds, m.queueList.SetItems(items))
 		}
@@ -448,7 +456,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleDownloadsMode(msg, cmds)
 		}
 
-		isFiltering := m.list.FilterState() == list.Filtering || m.epList.FilterState() == list.Filtering
+		isFiltering := m.list.FilterState() == list.Filtering ||
+			m.epList.FilterState() == list.Filtering
 
 		if key.Matches(msg, m.keys.Add) && !isFiltering {
 			m.openAddModal()
@@ -580,7 +589,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.loadPodcasts(), m.loadEpisodes(msg.podcastID), m.spin.Tick)
 
 		if msg.newCount > 0 {
-			m.setStatus(fmt.Sprintf("Added %d new episode%s", msg.newCount, suffix(msg.newCount)), "success")
+			m.setStatus(
+				fmt.Sprintf("Added %d new episode%s", msg.newCount, suffix(msg.newCount)),
+				"success",
+			)
 		} else {
 			m.setStatus("No new episodes", "info")
 		}
@@ -607,7 +619,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			flashTick := time.Now().Unix()
 			items := make([]list.Item, len(msg.jobs))
 			for i, job := range msg.jobs {
-				items[i] = DownloadJobItem{DownloadJob: job}.WithTheme(m.theme).WithFlashTick(flashTick)
+				items[i] = DownloadJobItem{
+					DownloadJob: job,
+				}.WithTheme(m.theme).
+					WithFlashTick(flashTick)
 			}
 			cmds = append(cmds, m.queueList.SetItems(items))
 		}
@@ -663,7 +678,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 
 			// Open "go to episode" modal when 'g' is pressed (skip if filtering)
-			if key.Matches(msg, m.keys.GoToEpisode) && m.epList.FilterState() != list.Filtering && m.state == stateBrowse {
+			if key.Matches(msg, m.keys.GoToEpisode) && m.epList.FilterState() != list.Filtering &&
+				m.state == stateBrowse {
 				m.openGoToEpisodeModal()
 				cmds = append(cmds, m.goToInput.Focus())
 				return m, tea.Batch(cmds...)
@@ -765,7 +781,10 @@ func (m Model) handleGoToEpisodeMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.M
 
 		idx := num - 1
 		if idx < 0 || idx >= len(m.episodes) {
-			m.setStatus(fmt.Sprintf("Episode %d out of range (1-%d)", num, len(m.episodes)), "warning")
+			m.setStatus(
+				fmt.Sprintf("Episode %d out of range (1-%d)", num, len(m.episodes)),
+				"warning",
+			)
 			return m, tea.Batch(cmds...)
 		}
 
@@ -1063,6 +1082,7 @@ func (m Model) renderHelpPage() string {
 	subtitle := m.theme.MutedText.Render("How to use Gocaster and navigate the interface.")
 	panel := m.theme.PanelFocused.Width(max(m.contentWidth()-4, 20))
 
+	// TODO: add app logo
 	return panel.Render(lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		subtitle,
@@ -1084,7 +1104,9 @@ func (m Model) renderDownloadsPage() string {
 	body := m.queueList.View()
 
 	if len(m.queueList.Items()) == 0 {
-		body = m.theme.MutedText.Render("No downloads in queue.\n\nPress 'd' on an episode to download it.")
+		body = m.theme.MutedText.Render(
+			"No downloads in queue.\n\nPress 'd' on an episode to download it.",
+		)
 	}
 
 	return panel.Width(max(m.contentWidth()-4, 20)).
@@ -1200,7 +1222,10 @@ func (m Model) renderDetailContent(availableHeight int) string {
 	topCard := m.theme.Card.Width(max(m.detailPaneWidth(), 16)).
 		Render(strings.Join(detailParts, "\n") + "\n" + descriptionWrapped)
 
-	episodesHeight := max(availableHeight-lipgloss.Height(topCard)-episodesHeadingHeight, minEpisodesHeight)
+	episodesHeight := max(
+		availableHeight-lipgloss.Height(topCard)-episodesHeadingHeight,
+		minEpisodesHeight,
+	)
 	episodes := m.renderEpisodes(episodesHeight)
 
 	return lipgloss.JoinVertical(lipgloss.Left,
