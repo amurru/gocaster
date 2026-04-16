@@ -1,10 +1,14 @@
 # Gocaster
 
-![Gocaster Screenshot](assets/screenshot.png)
+![Gocaster](assets/gocaster.png)
 
 Gocaster is a lightweight, terminal-based podcast client written in Go using the Bubble Tea TUI framework.
 
 This repository contains the application, adapters for persistence and playback, and a Bubble Tea-based TUI so you can browse, subscribe, and play podcast episodes from your terminal.
+
+## Screenshot
+
+![Gocaster Screenshot](assets/screenshot.png)
 
 ## Key highlights
 
@@ -49,16 +53,17 @@ This repository contains the application, adapters for persistence and playback,
 ### Configuration
 
 Gocaster reads configuration from a TOML file. The default config file location is:
+
 - Linux: `~/.config/gocaster/gocaster.toml` (or `$XDG_CONFIG_HOME/gocaster/gocaster.toml` if set)
 
 If the config file doesn't exist, it will be created automatically with default values.
 
 **Config options:**
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `database_path` | `~/.local/state/gocaster/gocaster.db` | Full path to SQLite database |
-| `download_path` | `~/.local/state/gocaster/downloads` | Full path to download directory |
+| Option          | Default                               | Description                     |
+| --------------- | ------------------------------------- | ------------------------------- |
+| `database_path` | `~/.local/state/gocaster/gocaster.db` | Full path to SQLite database    |
+| `download_path` | `~/.local/state/gocaster/downloads`   | Full path to download directory |
 
 **Example config:**
 
