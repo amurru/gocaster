@@ -169,7 +169,11 @@ func (s *DownloadService) runDownload(jobID int64) {
 	}
 
 	url := episode.AudioURL
-	filename := safeFilename(episode.Title)
+	safeName := safeFilename(episode.Title)
+	contentType := ""
+	ext := extractExtension(url, contentType)
+	filename := safeName + ext
+	extFromURL := ext != ".audio"
 
 	partPath := filepath.Join(s.downloadDir, filename+".part")
 	finalPath := filepath.Join(s.downloadDir, filename)
@@ -203,7 +207,6 @@ func (s *DownloadService) runDownload(jobID int64) {
 	} else {
 		file.Truncate(0)
 		req, _ = http.NewRequest("GET", url, nil)
-		resumeOffset = 0
 	}
 
 	resp, err := s.http.Do(req)
@@ -226,7 +229,6 @@ func (s *DownloadService) runDownload(jobID int64) {
 		}
 		defer resp2.Body.Close()
 		resp = resp2
-		resumeOffset = 0
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
@@ -238,6 +240,13 @@ func (s *DownloadService) runDownload(jobID int64) {
 		if ct := resp.Header.Get("Content-Length"); ct != "" {
 			fmt.Sscanf(ct, "%d", &job.BytesTotal)
 		}
+	}
+
+	if contentType == "" {
+		contentType = resp.Header.Get("Content-Type")
+	}
+	if ext := extractExtension(url, contentType); extFromURL || ext != ".audio" {
+		filename = safeName + ext
 	}
 
 	if resp.StatusCode == http.StatusPartialContent {
@@ -319,4 +328,46 @@ func safeFilename(name string) string {
 		safe = "download"
 	}
 	return safe
+}
+
+func extractExtension(url string, contentType string) string {
+	if ext := findExtensionFromURL(url); ext != "" {
+		return ext
+	}
+	if ext := findExtensionFromContentType(contentType); ext != "" {
+		return ext
+	}
+	return ".audio"
+}
+
+func findExtensionFromURL(url string) string {
+	exts := []string{".mp3", ".m4a", ".aac", ".ogg", ".wav", ".flac", ".opus", ".webm"}
+	lower := strings.ToLower(url)
+	for _, ext := range exts {
+		if strings.Contains(lower, ext) {
+			return ext
+		}
+	}
+	return ""
+}
+
+func findExtensionFromContentType(contentType string) string {
+	types := map[string]string{
+		"audio/mpeg":  ".mp3",
+		"audio/mp4":   ".m4a",
+		"audio/x-m4a": ".m4a",
+		"audio/aac":   ".aac",
+		"audio/x-aac": ".aac",
+		"audio/ogg":   ".ogg",
+		"audio/wav":   ".wav",
+		"audio/x-wav": ".wav",
+		"audio/flac":  ".flac",
+		"audio/webm":  ".webm",
+		"audio/opus":  ".opus",
+	}
+	ct := strings.TrimSpace(strings.Split(contentType, ";")[0])
+	if ext, ok := types[ct]; ok {
+		return ext
+	}
+	return ""
 }
