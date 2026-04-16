@@ -49,5 +49,39 @@ func RunMigrations(db *sql.DB) error {
 	}
 
 	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_episodes_published_at ON episodes(published_at DESC)`)
+	if err != nil {
+		return err
+	}
+
+	// Create downloads table
+	_, err = db.Exec(`
+        CREATE TABLE IF NOT EXISTS downloads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            episode_id INTEGER NOT NULL UNIQUE,
+            status TEXT NOT NULL DEFAULT 'queued',
+            bytes_downloaded INTEGER DEFAULT 0,
+            bytes_total INTEGER DEFAULT 0,
+            temp_path TEXT,
+            final_path TEXT,
+            etag TEXT,
+            last_modified TEXT,
+            supports_resume BOOLEAN DEFAULT 0,
+            error_message TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE
+        )
+    `)
+	if err != nil {
+		return err
+	}
+
+	// Create indexes for downloads table
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status)`)
+	if err != nil {
+		return err
+	}
+
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_downloads_updated_at ON downloads(updated_at)`)
 	return err
 }

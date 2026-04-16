@@ -28,9 +28,11 @@ const (
 	stateAddPodcast  viewState = "add_podcast"
 	stateGoToEpisode viewState = "go_to_episode"
 	stateHelp        viewState = "help"
+	stateDownloads   viewState = "downloads"
 
 	focusLibrary paneFocus = "library"
 	focusDetail  paneFocus = "detail"
+	focusQueue   paneFocus = "queue"
 )
 
 type episodeSortOrder string
@@ -67,8 +69,29 @@ type podcastRefreshedMsg struct {
 	err       error
 }
 
+type downloadJobsLoadedMsg struct {
+	jobs []domain.DownloadJob
+	err  error
+}
+
+type downloadQueuedMsg struct {
+	episodeID int64
+	err       error
+}
+
+type downloadStartedMsg struct {
+	jobID int64
+	err   error
+}
+
+type downloadRetriedMsg struct {
+	jobID int64
+	err   error
+}
+
 type Model struct {
-	podcastService *application.PodcastService
+	podcastService  *application.PodcastService
+	downloadService *application.DownloadService
 
 	state     viewState
 	keys      keyMap
@@ -101,12 +124,16 @@ type Model struct {
 	episodes        []domain.Episode
 	selectedEpisode *domain.Episode
 	sortOrder       episodeSortOrder
+
+	downloadJobs []domain.DownloadJob
+	queueList    list.Model
 }
 
-func NewModel(svc *application.PodcastService) Model {
+func NewModel(svc *application.PodcastService, dsvc *application.DownloadService) Model {
 	theme := styles.NewTheme()
 	delegate := components.NewPodcastDelegate(theme)
 	episodeDelegate := components.NewEpisodeDelegate(theme)
+	downloadJobDelegate := components.NewDownloadJobDelegate(theme)
 
 	podcastList := list.New([]list.Item{}, delegate, 0, 0)
 	podcastList.Title = "Podcasts"
@@ -179,14 +206,33 @@ func NewModel(svc *application.PodcastService) Model {
 	helpModel.Styles.FullKey = theme.HelpText
 	helpModel.Styles.FullDesc = theme.HelpText
 
+	downloadQueueList := list.New([]list.Item{}, downloadJobDelegate, 0, 0)
+	downloadQueueList.Title = "Downloads"
+	downloadQueueList.DisableQuitKeybindings()
+	downloadQueueList.SetShowTitle(false)
+	downloadQueueList.SetShowHelp(false)
+	downloadQueueList.SetShowStatusBar(false)
+	downloadQueueList.SetStatusBarItemName("download", "downloads")
+	downloadQueueList.Styles.Filter.Focused.Prompt = theme.Label
+	downloadQueueList.Styles.Filter.Blurred.Prompt = theme.MutedText
+	downloadQueueList.Styles.Filter.Focused.Text = theme.Body
+	downloadQueueList.Styles.Filter.Blurred.Text = theme.Body
+	downloadQueueList.Styles.Filter.Focused.Placeholder = theme.MutedText
+	downloadQueueList.Styles.Filter.Blurred.Placeholder = theme.MutedText
+	downloadQueueList.Styles.NoItems = theme.MutedText
+	downloadQueueList.Styles.StatusBar = theme.MutedText
+	downloadQueueList.Styles.PaginationStyle = theme.MutedText
+
 	return Model{
 		podcastService:  svc,
+		downloadService: dsvc,
 		state:           stateBrowse,
 		keys:            defaultKeyMap(),
 		theme:           theme,
 		help:            helpModel,
 		list:            podcastList,
 		epList:          episodeList,
+		queueList:       downloadQueueList,
 		detail:          detailViewport,
 		guide:           guideViewport,
 		input:           input,
@@ -245,6 +291,34 @@ func (m Model) refreshPodcast(podcastID int64) tea.Cmd {
 	}
 }
 
+func (m Model) loadDownloadJobs() tea.Cmd {
+	return func() tea.Msg {
+		jobs, err := m.downloadService.ListJobs()
+		return downloadJobsLoadedMsg{jobs: jobs, err: err}
+	}
+}
+
+func (m Model) queueDownload(episodeID int64) tea.Cmd {
+	return func() tea.Msg {
+		err := m.downloadService.QueueEpisodeDownload(episodeID)
+		return downloadQueuedMsg{episodeID: episodeID, err: err}
+	}
+}
+
+func (m Model) startDownload(jobID int64) tea.Cmd {
+	return func() tea.Msg {
+		err := m.downloadService.StartJob(jobID)
+		return downloadStartedMsg{jobID: jobID, err: err}
+	}
+}
+
+func (m Model) retryDownload(jobID int64) tea.Cmd {
+	return func() tea.Msg {
+		err := m.downloadService.RetryJob(jobID)
+		return downloadRetriedMsg{jobID: jobID, err: err}
+	}
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 
@@ -276,6 +350,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			cmds = append(cmds, m.epList.SetItems(items))
 		}
+
+		// Update download queue progress (skip if filtering is active)
+		if m.state == stateDownloads && len(m.downloadJobs) > 0 && m.queueList.FilterState() == list.Unfiltered {
+			flashTick := time.Now().Unix()
+			items := make([]list.Item, len(m.downloadJobs))
+			for i, job := range m.downloadJobs {
+				items[i] = DownloadJobItem{DownloadJob: job}.WithTheme(m.theme).WithFlashTick(flashTick)
+			}
+			cmds = append(cmds, m.queueList.SetItems(items))
+		}
+
+		// Reload download jobs when in downloads view to get fresh progress
+		if m.state == stateDownloads {
+			cmds = append(cmds, m.loadDownloadJobs())
+		}
+
 		return m, tea.Batch(cmds...)
 	case tea.PasteMsg:
 		// Pass the paste directly to the input component
@@ -321,6 +411,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleGoToEpisodeMode(msg, cmds)
 		}
 
+		if m.state == stateDownloads {
+			return m.handleDownloadsMode(msg, cmds)
+		}
+
 		isFiltering := m.list.FilterState() == list.Filtering || m.epList.FilterState() == list.Filtering
 
 		if key.Matches(msg, m.keys.Add) && !isFiltering {
@@ -343,6 +437,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.loadingDetail = true
 			m.setStatus("Refreshing feed…", "info")
 			cmds = append(cmds, m.refreshPodcast(m.selectedPodcast.ID), m.spin.Tick)
+			return m, tea.Batch(cmds...)
+		}
+
+		if key.Matches(msg, m.keys.DownloadQueue) && !isFiltering {
+			m.openDownloadsQueue()
+			cmds = append(cmds, m.loadDownloadJobs(), m.spin.Tick)
+			return m, tea.Batch(cmds...)
+		}
+
+		if m.focus == focusDetail && key.Matches(msg, m.keys.DownloadEpisode) && !isFiltering {
+			if m.selectedEpisode != nil {
+				cmds = append(cmds, m.queueDownload(m.selectedEpisode.ID))
+			}
 			return m, tea.Batch(cmds...)
 		}
 
@@ -448,6 +555,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case errMsg:
 		m.setStatus(msg.err.Error(), "error")
+		return m, tea.Batch(cmds...)
+
+	case downloadQueuedMsg:
+		if msg.err != nil {
+			m.setStatus(fmt.Sprintf("Download queue failed: %v", msg.err), "error")
+		} else {
+			m.setStatus("Episode queued for download", "success")
+			cmds = append(cmds, m.loadDownloadJobs())
+		}
+		return m, tea.Batch(cmds...)
+
+	case downloadJobsLoadedMsg:
+		m.downloadJobs = msg.jobs
+		if msg.err != nil {
+			m.setStatus("Failed to load downloads", "error")
+		} else {
+			flashTick := time.Now().Unix()
+			items := make([]list.Item, len(msg.jobs))
+			for i, job := range msg.jobs {
+				items[i] = DownloadJobItem{DownloadJob: job}.WithTheme(m.theme).WithFlashTick(flashTick)
+			}
+			cmds = append(cmds, m.queueList.SetItems(items))
+		}
+		return m, tea.Batch(cmds...)
+
+	case downloadStartedMsg:
+		if msg.err != nil {
+			m.setStatus(fmt.Sprintf("Start failed: %v", msg.err), "error")
+		} else {
+			m.setStatus("Download started", "success")
+		}
+		cmds = append(cmds, m.loadDownloadJobs())
+		return m, tea.Batch(cmds...)
+
+	case downloadRetriedMsg:
+		if msg.err != nil {
+			m.setStatus(fmt.Sprintf("Retry failed: %v", msg.err), "error")
+		} else {
+			m.setStatus("Download retry started", "success")
+		}
+		cmds = append(cmds, m.loadDownloadJobs())
 		return m, tea.Batch(cmds...)
 	}
 
@@ -731,6 +879,43 @@ func (m Model) isBusy() bool {
 	return m.loadingLibrary || m.loadingDetail || m.submitting
 }
 
+func (m *Model) openDownloadsQueue() {
+	m.state = stateDownloads
+	m.setStatus("Download queue opened", "info")
+}
+
+func (m *Model) handleDownloadsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.Close) {
+		m.state = stateBrowse
+		m.setStatus("Returned to library", "info")
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.StartDownload) {
+		selected := selectedDownloadJobItem(m.queueList)
+		if selected != nil && selected.Status == domain.DownloadStatusQueued {
+			cmds = append(cmds, m.startDownload(selected.ID))
+		}
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.RetryDownload) {
+		selected := selectedDownloadJobItem(m.queueList)
+		if selected != nil && selected.Status == domain.DownloadStatusFailed {
+			cmds = append(cmds, m.retryDownload(selected.ID))
+		}
+		return m, tea.Batch(cmds...)
+	}
+
+	var queueCmd tea.Cmd
+	m.queueList, queueCmd = m.queueList.Update(msg)
+	if queueCmd != nil {
+		cmds = append(cmds, queueCmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
 func (m Model) View() tea.View {
 	content := m.renderContent()
 	layout := m.theme.App.Render(lipgloss.JoinVertical(lipgloss.Left,
@@ -798,6 +983,10 @@ func (m Model) renderContent() string {
 		return lipgloss.NewStyle().MaxHeight(max(m.bodyHeight, 1)).Render(m.renderHelpPage())
 	}
 
+	if m.state == stateDownloads {
+		return lipgloss.NewStyle().MaxHeight(max(m.bodyHeight, 1)).Render(m.renderDownloadsPage())
+	}
+
 	if m.loadingLibrary && len(m.list.Items()) == 0 {
 		content := components.RenderLoading(m.theme, m.spin.View(), "Loading library…")
 		return lipgloss.NewStyle().MaxHeight(max(m.bodyHeight, 1)).Render(content)
@@ -833,6 +1022,28 @@ func (m Model) renderHelpPage() string {
 		"",
 		m.guide.View(),
 	))
+}
+
+func (m Model) renderDownloadsPage() string {
+	title := m.theme.SectionTitle.Render("Download Queue")
+	subtitle := m.theme.MutedText.Render("Manage your downloads. Press s to start, r to retry.")
+	panel := m.theme.Panel
+
+	paneHeight := max(m.bodyHeight, 1)
+	header := lipgloss.JoinVertical(lipgloss.Left, title, subtitle)
+	innerHeight := max(paneHeight-panel.GetVerticalFrameSize()-lipgloss.Height(header), 1)
+
+	m.queueList.SetSize(max(m.contentWidth()-4, 20), innerHeight)
+	body := m.queueList.View()
+
+	if len(m.queueList.Items()) == 0 {
+		body = m.theme.MutedText.Render("No downloads in queue.\n\nPress 'd' on an episode to download it.")
+	}
+
+	return panel.Width(max(m.contentWidth()-4, 20)).
+		Height(paneHeight).
+		MaxHeight(paneHeight).
+		Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
 }
 
 func (m Model) renderPodcastPane() string {
@@ -1162,6 +1373,15 @@ func selectedEpisodeItem(listModel list.Model) *EpisodeItem {
 	}
 	episode := item
 	return &episode
+}
+
+func selectedDownloadJobItem(listModel list.Model) *DownloadJobItem {
+	item, ok := listModel.SelectedItem().(DownloadJobItem)
+	if !ok {
+		return nil
+	}
+	job := item
+	return &job
 }
 
 func suffix(n int) string {

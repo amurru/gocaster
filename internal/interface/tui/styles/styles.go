@@ -7,36 +7,37 @@ import (
 )
 
 type Theme struct {
-	Background   color.Color
-	Surface      color.Color
-	SurfaceAlt   color.Color
-	Border       color.Color
-	Accent       color.Color
-	AccentSoft   color.Color
-	Text         color.Color
-	Muted        color.Color
-	Success      color.Color
-	Danger       color.Color
-	Warning      color.Color
-	App          lipgloss.Style
-	Header       lipgloss.Style
-	SectionTitle lipgloss.Style
-	Panel        lipgloss.Style
-	PanelFocused lipgloss.Style
-	Card         lipgloss.Style
-	CardSelected lipgloss.Style
-	Label        lipgloss.Style
-	Body         lipgloss.Style
-	MutedText    lipgloss.Style
-	StatusBar    lipgloss.Style
-	HelpText     lipgloss.Style
-	Badge        lipgloss.Style
-	BadgeNew     lipgloss.Style
-	BadgePlayed  lipgloss.Style
-	Input        lipgloss.Style
-	InputFocused lipgloss.Style
-	Modal        lipgloss.Style
-	Divider      lipgloss.Style
+	Background      color.Color
+	Surface         color.Color
+	SurfaceAlt      color.Color
+	Border          color.Color
+	Accent          color.Color
+	AccentSoft      color.Color
+	Text            color.Color
+	Muted           color.Color
+	Success         color.Color
+	Danger          color.Color
+	Warning         color.Color
+	App             lipgloss.Style
+	Header          lipgloss.Style
+	SectionTitle    lipgloss.Style
+	Panel           lipgloss.Style
+	PanelFocused    lipgloss.Style
+	Card            lipgloss.Style
+	CardSelected    lipgloss.Style
+	Label           lipgloss.Style
+	Body            lipgloss.Style
+	MutedText       lipgloss.Style
+	StatusBar       lipgloss.Style
+	HelpText        lipgloss.Style
+	Badge           lipgloss.Style
+	BadgeNew        lipgloss.Style
+	BadgePlayed     lipgloss.Style
+	BadgeDownloaded lipgloss.Style
+	Input           lipgloss.Style
+	InputFocused    lipgloss.Style
+	Modal           lipgloss.Style
+	Divider         lipgloss.Style
 }
 
 func NewTheme() Theme {
@@ -121,6 +122,11 @@ func NewTheme() Theme {
 			Foreground(muted).
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(muted).
+			Padding(0, 1),
+		BadgeDownloaded: lipgloss.NewStyle().
+			Foreground(success).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(success).
 			Padding(0, 1),
 		Input: lipgloss.NewStyle().
 			Foreground(text).

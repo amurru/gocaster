@@ -16,6 +16,10 @@ type keyMap struct {
 	Filter            key.Binding
 	GoToEpisode       key.Binding
 	ToggleEpisodeSort key.Binding
+	DownloadQueue     key.Binding
+	DownloadEpisode   key.Binding
+	StartDownload     key.Binding
+	RetryDownload     key.Binding
 }
 
 func defaultKeyMap() keyMap {
@@ -72,16 +76,32 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("s"),
 			key.WithHelp("s", "sort episodes"),
 		),
+		DownloadQueue: key.NewBinding(
+			key.WithKeys("D"),
+			key.WithHelp("D", "download queue"),
+		),
+		DownloadEpisode: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("d", "download episode"),
+		),
+		StartDownload: key.NewBinding(
+			key.WithKeys("s"),
+			key.WithHelp("s", "start"),
+		),
+		RetryDownload: key.NewBinding(
+			key.WithKeys("r"),
+			key.WithHelp("r", "retry"),
+		),
 	}
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Add, k.RefreshPodcast, k.GoToEpisode, k.ToggleEpisodeSort, k.SwitchPane, k.PlayEpisode, k.NextEpisode, k.PrevEpisode, k.Filter, k.Close, k.ToggleHelp, k.Quit}
+	return []key.Binding{k.Add, k.RefreshPodcast, k.GoToEpisode, k.ToggleEpisodeSort, k.DownloadQueue, k.SwitchPane, k.PlayEpisode, k.NextEpisode, k.PrevEpisode, k.Filter, k.Close, k.ToggleHelp, k.Quit}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Add, k.RefreshPodcast, k.GoToEpisode, k.ToggleEpisodeSort, k.SwitchPane, k.PlayEpisode, k.NextEpisode, k.PrevEpisode, k.Filter},
+		{k.Add, k.RefreshPodcast, k.GoToEpisode, k.ToggleEpisodeSort, k.DownloadQueue, k.SwitchPane, k.PlayEpisode, k.NextEpisode, k.PrevEpisode, k.Filter},
 		{k.Submit, k.Close},
 		{k.ToggleHelp, k.Quit},
 	}

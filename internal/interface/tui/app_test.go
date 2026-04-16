@@ -33,8 +33,9 @@ func newTestModel(t *testing.T) Model {
 	}
 	t.Cleanup(func() { _ = repo.Close() })
 
-	service := application.NewPodcastService(repo, tuiMockFeedParser{})
-	return NewModel(service)
+	podcastService := application.NewPodcastService(repo, tuiMockFeedParser{})
+	downloadService := application.NewDownloadService(repo, "downloads")
+	return NewModel(podcastService, downloadService)
 }
 
 func keyMsg(text string, code rune) tea.KeyPressMsg {

@@ -29,8 +29,15 @@ func main() {
 	fetcher := rss.NewFeedFetcher()
 	podcastSvc := application.NewPodcastService(repo, fetcher)
 
+	// Ensure downloads directory exists
+	downloadDir := "downloads"
+	if err := os.MkdirAll(downloadDir, 0755); err != nil {
+		log.Fatal("fatal: ", err)
+	}
+	downloadSvc := application.NewDownloadService(repo, downloadDir)
+
 	// UI model
-	model := tui.NewModel(podcastSvc)
+	model := tui.NewModel(podcastSvc, downloadSvc)
 	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("[☠️] there's been an error: %v", err)
