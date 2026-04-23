@@ -52,7 +52,18 @@ func main() {
 	playerSvc := application.NewPlayerService(repo, mpvPlayer, broadcaster)
 
 	// UI model
-	model := tui.NewModel(podcastSvc, downloadSvc, playerSvc)
+	settings := tui.SyncSettings{
+		AutoSyncOnStartup: cfg.AutoSyncOnStartup,
+		PeriodicSync:      cfg.PeriodicSync,
+		PeriodicSyncMins:  cfg.PeriodicSyncMins,
+	}
+	saveSettings := func(next tui.SyncSettings) error {
+		cfg.AutoSyncOnStartup = next.AutoSyncOnStartup
+		cfg.PeriodicSync = next.PeriodicSync
+		cfg.PeriodicSyncMins = next.PeriodicSyncMins
+		return config.Save(cfg)
+	}
+	model := tui.NewModel(podcastSvc, downloadSvc, playerSvc, settings, saveSettings)
 	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("[☠️] there's been an error: %v", err)

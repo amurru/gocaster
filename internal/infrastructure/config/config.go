@@ -10,9 +10,14 @@ import (
 )
 
 type Config struct {
-	DatabasePath string `toml:"database_path"`
-	DownloadPath string `toml:"download_path"`
+	DatabasePath      string `toml:"database_path"`
+	DownloadPath      string `toml:"download_path"`
+	AutoSyncOnStartup bool   `toml:"auto_sync_on_startup"`
+	PeriodicSync      bool   `toml:"periodic_sync_enabled"`
+	PeriodicSyncMins  int    `toml:"periodic_sync_minutes"`
 }
+
+const defaultPeriodicSyncMins = 60
 
 func LoadOrCreate() (Config, error) {
 	dirs, err := getDirs()
@@ -23,8 +28,11 @@ func LoadOrCreate() (Config, error) {
 	configPath := filepath.Join(dirs.configDir, "gocaster.toml")
 
 	cfg := Config{
-		DatabasePath: dirs.defaultDB,
-		DownloadPath: dirs.defaultDownloads,
+		DatabasePath:      dirs.defaultDB,
+		DownloadPath:      dirs.defaultDownloads,
+		AutoSyncOnStartup: false,
+		PeriodicSync:      false,
+		PeriodicSyncMins:  defaultPeriodicSyncMins,
 	}
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
@@ -62,6 +70,11 @@ func LoadOrCreate() (Config, error) {
 
 	if len(meta.Undecoded()) > 0 {
 		fmt.Printf("Warning: config has unknown fields, ignoring them\n")
+	}
+
+	if cfg.PeriodicSyncMins <= 0 {
+		fmt.Printf("Warning: periodic_sync_minutes must be greater than zero, using default\n")
+		cfg.PeriodicSyncMins = defaultPeriodicSyncMins
 	}
 
 	return cfg, nil
@@ -143,6 +156,18 @@ func writeDefaultConfig(path string, cfg Config) error {
 	}
 
 	return nil
+}
+
+func Save(cfg Config) error {
+	if cfg.PeriodicSyncMins <= 0 {
+		return fmt.Errorf("periodic_sync_minutes must be greater than zero")
+	}
+	dirs, err := getDirs()
+	if err != nil {
+		return fmt.Errorf("failed to determine config dirs: %w", err)
+	}
+	configPath := filepath.Join(dirs.configDir, "gocaster.toml")
+	return writeDefaultConfig(configPath, cfg)
 }
 
 func EnsureDirs(cfg Config) error {

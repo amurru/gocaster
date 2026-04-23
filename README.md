@@ -64,12 +64,18 @@ If the config file doesn't exist, it will be created automatically with default 
 | --------------- | ------------------------------------- | ------------------------------- |
 | `database_path` | `~/.local/state/gocaster/gocaster.db` | Full path to SQLite database    |
 | `download_path` | `~/.local/state/gocaster/downloads`   | Full path to download directory |
+| `auto_sync_on_startup` | `false`                        | Refresh all subscribed podcasts when app starts |
+| `periodic_sync_enabled` | `false`                      | Enable automatic periodic refresh while app is open |
+| `periodic_sync_minutes` | `60`                         | Interval in minutes for periodic refresh (must be > 0) |
 
 **Example config:**
 
 ```toml
 database_path = "/home/user/my-podcasts.db"
 download_path = "/home/user/Downloads/Podcasts"
+auto_sync_on_startup = true
+periodic_sync_enabled = true
+periodic_sync_minutes = 60
 ```
 
 You can use `~` in paths (e.g., `~/Downloads`), which will be expanded to your home directory.

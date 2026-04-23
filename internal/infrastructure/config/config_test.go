@@ -76,13 +76,19 @@ func TestIsAbsolute(t *testing.T) {
 
 func TestConfigFields(t *testing.T) {
 	cfg := Config{
-		DatabasePath: "/custom/db/path.db",
-		DownloadPath: "/custom/downloads",
+		DatabasePath:      "/custom/db/path.db",
+		DownloadPath:      "/custom/downloads",
+		AutoSyncOnStartup: true,
+		PeriodicSync:      true,
+		PeriodicSyncMins:  30,
 	}
 
 	meta, err := toml.Decode(`
 database_path = "/custom/db/path.db"
 download_path = "/custom/downloads"
+auto_sync_on_startup = true
+periodic_sync_enabled = true
+periodic_sync_minutes = 30
 `, &cfg)
 	if err != nil {
 		t.Fatalf("toml decode failed: %v", err)
@@ -93,6 +99,15 @@ download_path = "/custom/downloads"
 	}
 	if cfg.DownloadPath != "/custom/downloads" {
 		t.Errorf("download_path = %q, want %q", cfg.DownloadPath, "/custom/downloads")
+	}
+	if !cfg.AutoSyncOnStartup {
+		t.Error("auto_sync_on_startup = false, want true")
+	}
+	if !cfg.PeriodicSync {
+		t.Error("periodic_sync_enabled = false, want true")
+	}
+	if cfg.PeriodicSyncMins != 30 {
+		t.Errorf("periodic_sync_minutes = %d, want %d", cfg.PeriodicSyncMins, 30)
 	}
 
 	if len(meta.Undecoded()) > 0 {
@@ -116,6 +131,15 @@ database_path = "/only/db"
 	if cfg.DownloadPath != "" {
 		t.Errorf("download_path = %q, want empty (default)", cfg.DownloadPath)
 	}
+	if cfg.AutoSyncOnStartup {
+		t.Error("auto_sync_on_startup = true, want false default")
+	}
+	if cfg.PeriodicSync {
+		t.Error("periodic_sync_enabled = true, want false default")
+	}
+	if cfg.PeriodicSyncMins != 0 {
+		t.Errorf("periodic_sync_minutes = %d, want 0 when unset", cfg.PeriodicSyncMins)
+	}
 }
 
 func TestWriteDefaultConfig(t *testing.T) {
@@ -123,8 +147,11 @@ func TestWriteDefaultConfig(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "gocaster.toml")
 
 	cfg := Config{
-		DatabasePath: "/default/db.db",
-		DownloadPath: "/default/downloads",
+		DatabasePath:      "/default/db.db",
+		DownloadPath:      "/default/downloads",
+		AutoSyncOnStartup: true,
+		PeriodicSync:      true,
+		PeriodicSyncMins:  45,
 	}
 
 	err := writeDefaultConfig(configPath, cfg)
@@ -152,5 +179,21 @@ func TestWriteDefaultConfig(t *testing.T) {
 	}
 	if loaded.DownloadPath != cfg.DownloadPath {
 		t.Errorf("download_path in file = %q, want %q", loaded.DownloadPath, cfg.DownloadPath)
+	}
+	if loaded.AutoSyncOnStartup != cfg.AutoSyncOnStartup {
+		t.Errorf("auto_sync_on_startup in file = %v, want %v", loaded.AutoSyncOnStartup, cfg.AutoSyncOnStartup)
+	}
+	if loaded.PeriodicSync != cfg.PeriodicSync {
+		t.Errorf("periodic_sync_enabled in file = %v, want %v", loaded.PeriodicSync, cfg.PeriodicSync)
+	}
+	if loaded.PeriodicSyncMins != cfg.PeriodicSyncMins {
+		t.Errorf("periodic_sync_minutes in file = %d, want %d", loaded.PeriodicSyncMins, cfg.PeriodicSyncMins)
+	}
+}
+
+func TestSaveRejectsInvalidPeriodicSyncMinutes(t *testing.T) {
+	cfg := Config{PeriodicSyncMins: 0}
+	if err := Save(cfg); err == nil {
+		t.Fatal("Save should reject non-positive periodic_sync_minutes")
 	}
 }

@@ -38,7 +38,8 @@ func (s *DownloadService) QueueEpisodeDownload(episodeID int64) error {
 
 	existingJob, err := s.repo.FindDownloadJobByEpisodeID(episodeID)
 	if err == nil && existingJob != nil {
-		if existingJob.Status == domain.DownloadStatusDownloading || existingJob.Status == domain.DownloadStatusQueued {
+		if existingJob.Status == domain.DownloadStatusDownloading ||
+			existingJob.Status == domain.DownloadStatusQueued {
 			return fmt.Errorf("episode already in queue")
 		}
 		if existingJob.Status == domain.DownloadStatusFailed {
@@ -80,11 +81,18 @@ func (s *DownloadService) StartJob(jobID int64) error {
 		return err
 	}
 
-	if job.Status != domain.DownloadStatusQueued && job.Status != domain.DownloadStatusFailed && job.Status != domain.DownloadStatusPaused {
+	if job.Status != domain.DownloadStatusQueued && job.Status != domain.DownloadStatusFailed &&
+		job.Status != domain.DownloadStatusPaused {
 		return fmt.Errorf("job is not in a startable state: %s", job.Status)
 	}
 
-	if err := s.repo.UpdateDownloadJobStatus(jobID, domain.DownloadStatusDownloading, job.BytesDownloaded, job.BytesTotal, ""); err != nil {
+	if err := s.repo.UpdateDownloadJobStatus(
+		jobID,
+		domain.DownloadStatusDownloading,
+		job.BytesDownloaded,
+		job.BytesTotal,
+		"",
+	); err != nil {
 		return fmt.Errorf("could not start job: %w", err)
 	}
 
@@ -104,7 +112,13 @@ func (s *DownloadService) ResumeJob(jobID int64) error {
 	}
 
 	job.Status = domain.DownloadStatusQueued
-	if err := s.repo.UpdateDownloadJobStatus(jobID, domain.DownloadStatusDownloading, job.BytesDownloaded, job.BytesTotal, ""); err != nil {
+	if err := s.repo.UpdateDownloadJobStatus(
+		jobID,
+		domain.DownloadStatusDownloading,
+		job.BytesDownloaded,
+		job.BytesTotal,
+		"",
+	); err != nil {
 		return fmt.Errorf("could not resume job: %w", err)
 	}
 
@@ -128,7 +142,13 @@ func (s *DownloadService) RetryJob(jobID int64) error {
 	job.BytesTotal = 0
 	job.ErrorMessage = ""
 
-	if err := s.repo.UpdateDownloadJobStatus(jobID, domain.DownloadStatusDownloading, 0, 0, ""); err != nil {
+	if err := s.repo.UpdateDownloadJobStatus(
+		jobID,
+		domain.DownloadStatusDownloading,
+		0,
+		0,
+		"",
+	); err != nil {
 		return fmt.Errorf("could not retry job: %w", err)
 	}
 
@@ -219,7 +239,13 @@ func (s *DownloadService) runDownload(jobID int64) {
 	if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
 		file.Truncate(0)
 		job.BytesDownloaded = 0
-		s.repo.UpdateDownloadJobStatus(jobID, domain.DownloadStatusDownloading, 0, job.BytesTotal, "")
+		s.repo.UpdateDownloadJobStatus(
+			jobID,
+			domain.DownloadStatusDownloading,
+			0,
+			job.BytesTotal,
+			"",
+		)
 
 		req2, _ := http.NewRequest("GET", url, nil)
 		resp2, err := s.http.Do(req2)
@@ -267,7 +293,13 @@ func (s *DownloadService) runDownload(jobID int64) {
 	job.TempPath = partPath
 	job.FinalPath = finalPath
 
-	s.repo.UpdateDownloadJobStatus(jobID, domain.DownloadStatusDownloading, job.BytesDownloaded, job.BytesTotal, "")
+	s.repo.UpdateDownloadJobStatus(
+		jobID,
+		domain.DownloadStatusDownloading,
+		job.BytesDownloaded,
+		job.BytesTotal,
+		"",
+	)
 
 	buf := make([]byte, 32*1024)
 	var wrote int64
@@ -284,7 +316,13 @@ func (s *DownloadService) runDownload(jobID int64) {
 			job.BytesDownloaded += int64(wn)
 
 			if job.BytesTotal > 0 && job.BytesDownloaded%1024000 < int64(n) {
-				s.repo.UpdateDownloadJobStatus(jobID, domain.DownloadStatusDownloading, job.BytesDownloaded, job.BytesTotal, "")
+				s.repo.UpdateDownloadJobStatus(
+					jobID,
+					domain.DownloadStatusDownloading,
+					job.BytesDownloaded,
+					job.BytesTotal,
+					"",
+				)
 			}
 		}
 
@@ -315,7 +353,13 @@ func (s *DownloadService) runDownload(jobID int64) {
 }
 
 func (s *DownloadService) failJob(jobID int64, errorMsg string) {
-	if err := s.repo.UpdateDownloadJobStatus(jobID, domain.DownloadStatusFailed, 0, 0, errorMsg); err != nil {
+	if err := s.repo.UpdateDownloadJobStatus(
+		jobID,
+		domain.DownloadStatusFailed,
+		0,
+		0,
+		errorMsg,
+	); err != nil {
 		fmt.Printf("Warning: could not update job status: %v\n", err)
 	}
 }

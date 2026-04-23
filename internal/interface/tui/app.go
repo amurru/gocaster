@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,7 @@ const (
 	stateGoToEpisode viewState = "go_to_episode"
 	stateHelp        viewState = "help"
 	stateDownloads   viewState = "downloads"
+	stateSettings    viewState = "settings"
 
 	focusLibrary paneFocus = "library"
 	focusDetail  paneFocus = "detail"
@@ -99,24 +101,43 @@ type playbackStatusMsg struct {
 	err    error
 }
 
+type allPodcastsSyncedMsg struct {
+	result application.RefreshAllResult
+	err    error
+	reason string
+}
+
+type settingsPersistedMsg struct {
+	settings SyncSettings
+	previous SyncSettings
+	err      error
+}
+
+type SyncSettings struct {
+	AutoSyncOnStartup bool
+	PeriodicSync      bool
+	PeriodicSyncMins  int
+}
+
 type Model struct {
 	podcastService  *application.PodcastService
 	downloadService *application.DownloadService
 	playerService   *application.PlayerService
 
-	state     viewState
-	keys      keyMap
-	theme     styles.Theme
-	help      help.Model
-	list      list.Model
-	epList    list.Model
-	detail    viewport.Model
-	guide     viewport.Model
-	input     textinput.Model
-	goToInput textinput.Model
-	spin      spinner.Model
-	status    string
-	kind      string
+	state         viewState
+	keys          keyMap
+	theme         styles.Theme
+	help          help.Model
+	list          list.Model
+	epList        list.Model
+	detail        viewport.Model
+	guide         viewport.Model
+	input         textinput.Model
+	goToInput     textinput.Model
+	intervalInput textinput.Model
+	spin          spinner.Model
+	status        string
+	kind          string
 
 	width  int
 	height int
@@ -139,14 +160,25 @@ type Model struct {
 	downloadJobs []domain.DownloadJob
 	queueList    list.Model
 
-	playbackStatus domain.PlaybackStatus
+	playbackStatus     domain.PlaybackStatus
+	settings           SyncSettings
+	saveSettings       func(SyncSettings) error
+	settingsCursor     int
+	editingInterval    bool
+	syncingAllFeeds    bool
+	nextPeriodicSyncAt time.Time
 }
 
 func NewModel(
 	svc *application.PodcastService,
 	dsvc *application.DownloadService,
 	psvc *application.PlayerService,
+	settings SyncSettings,
+	saveSettings func(SyncSettings) error,
 ) Model {
+	if settings.PeriodicSyncMins <= 0 {
+		settings.PeriodicSyncMins = 60
+	}
 	theme := styles.NewTheme()
 	delegate := components.NewPodcastDelegate(theme)
 	episodeDelegate := components.NewEpisodeDelegate(theme)
@@ -213,6 +245,14 @@ func NewModel(
 	goToInput.SetVirtualCursor(true)
 	goToInput.SetWidth(20)
 
+	intervalInput := textinput.New()
+	intervalInput.Prompt = ""
+	intervalInput.Placeholder = "60"
+	intervalInput.CharLimit = 4
+	intervalInput.SetVirtualCursor(true)
+	intervalInput.SetWidth(8)
+	intervalInput.SetValue(strconv.Itoa(settings.PeriodicSyncMins))
+
 	spin := spinner.New(spinner.WithSpinner(spinner.Line))
 	spin.Style = lipgloss.NewStyle().Foreground(theme.Accent)
 
@@ -255,6 +295,7 @@ func NewModel(
 		guide:           guideViewport,
 		input:           input,
 		goToInput:       goToInput,
+		intervalInput:   intervalInput,
 		spin:            spin,
 		status:          "Ready",
 		kind:            "info",
@@ -264,11 +305,24 @@ func NewModel(
 		episodes:        nil,
 		selectedEpisode: nil,
 		sortOrder:       sortNewestFirst,
+		settings:        settings,
+		saveSettings:    saveSettings,
+		syncingAllFeeds: settings.AutoSyncOnStartup,
+		nextPeriodicSyncAt: func() time.Time {
+			if settings.PeriodicSync {
+				return time.Now().Add(time.Duration(settings.PeriodicSyncMins) * time.Minute)
+			}
+			return time.Time{}
+		}(),
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.loadPodcasts(), m.spin.Tick, tickCmd())
+	cmds := []tea.Cmd{m.loadPodcasts(), m.spin.Tick, tickCmd()}
+	if m.settings.AutoSyncOnStartup {
+		cmds = append(cmds, m.syncAllPodcasts("startup"))
+	}
+	return tea.Batch(cmds...)
 }
 
 // tickCmd returns a command that ticks every second for badge flashing.
@@ -306,6 +360,23 @@ func (m Model) refreshPodcast(podcastID int64) tea.Cmd {
 	return func() tea.Msg {
 		newCount, err := m.podcastService.RefreshPodcast(podcastID)
 		return podcastRefreshedMsg{podcastID: podcastID, newCount: newCount, err: err}
+	}
+}
+
+func (m Model) syncAllPodcasts(reason string) tea.Cmd {
+	return func() tea.Msg {
+		result, err := m.podcastService.RefreshAllPodcasts()
+		return allPodcastsSyncedMsg{result: result, err: err, reason: reason}
+	}
+}
+
+func (m Model) persistSettings(next SyncSettings, previous SyncSettings) tea.Cmd {
+	return func() tea.Msg {
+		if m.saveSettings == nil {
+			return settingsPersistedMsg{settings: next, previous: previous}
+		}
+		err := m.saveSettings(next)
+		return settingsPersistedMsg{settings: next, previous: previous, err: err}
 	}
 }
 
@@ -407,6 +478,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.loadDownloadJobs())
 		}
 
+		if m.settings.PeriodicSync &&
+			!m.syncingAllFeeds &&
+			!m.nextPeriodicSyncAt.IsZero() &&
+			!time.Now().Before(m.nextPeriodicSyncAt) {
+			m.syncingAllFeeds = true
+			m.setStatus("Periodic sync started…", "info")
+			cmds = append(cmds, m.syncAllPodcasts("periodic"), m.spin.Tick)
+		}
+
 		return m, tea.Batch(cmds...)
 	case tea.PasteMsg:
 		// Pass the paste directly to the input component
@@ -425,6 +505,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.state = stateHelp
 				m.syncGuideViewport(true)
 				m.setStatus("Help page opened.", "info")
+			}
+			return m, tea.Batch(cmds...)
+		case key.Matches(msg, m.keys.Settings):
+			if m.state == stateSettings {
+				m.state = stateBrowse
+				m.editingInterval = false
+				m.intervalInput.Blur()
+				m.intervalInput.SetValue(strconv.Itoa(m.settings.PeriodicSyncMins))
+				m.setStatus("Returned to library.", "info")
+			} else if m.state == stateBrowse {
+				m.openSettingsPage()
+				m.setStatus("Settings page opened.", "info")
 			}
 			return m, tea.Batch(cmds...)
 		}
@@ -454,6 +546,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.state == stateDownloads {
 			return m.handleDownloadsMode(msg, cmds)
+		}
+
+		if m.state == stateSettings {
+			return m.handleSettingsMode(msg, cmds)
 		}
 
 		isFiltering := m.list.FilterState() == list.Filtering ||
@@ -596,6 +692,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.setStatus("No new episodes", "info")
 		}
+		return m, tea.Batch(cmds...)
+
+	case allPodcastsSyncedMsg:
+		m.syncingAllFeeds = false
+		if m.settings.PeriodicSync {
+			m.nextPeriodicSyncAt = time.Now().Add(time.Duration(m.settings.PeriodicSyncMins) * time.Minute)
+		}
+		if msg.err != nil {
+			m.setStatus(fmt.Sprintf("Sync failed: %v", msg.err), "error")
+			return m, tea.Batch(cmds...)
+		}
+
+		m.loadingLibrary = true
+		cmds = append(cmds, m.loadPodcasts(), m.spin.Tick)
+		if m.selectedPodcast != nil {
+			m.loadingDetail = true
+			cmds = append(cmds, m.loadEpisodes(m.selectedPodcast.ID))
+		}
+		prefix := "Sync complete"
+		if msg.reason == "startup" {
+			prefix = "Startup sync complete"
+		}
+		m.setStatus(
+			fmt.Sprintf(
+				"%s: %d new episodes across %d/%d podcasts (%d failed)",
+				prefix,
+				msg.result.NewEpisodes,
+				msg.result.Refreshed,
+				msg.result.TotalPodcasts,
+				msg.result.Failed,
+			),
+			"success",
+		)
+		return m, tea.Batch(cmds...)
+
+	case settingsPersistedMsg:
+		if msg.err != nil {
+			m.settings = msg.previous
+			m.intervalInput.SetValue(strconv.Itoa(m.settings.PeriodicSyncMins))
+			m.setStatus(fmt.Sprintf("Settings save failed: %v", msg.err), "error")
+			return m, tea.Batch(cmds...)
+		}
+		m.settings = msg.settings
+		if m.settings.PeriodicSync {
+			m.nextPeriodicSyncAt = time.Now().Add(time.Duration(m.settings.PeriodicSyncMins) * time.Minute)
+		} else {
+			m.nextPeriodicSyncAt = time.Time{}
+		}
+		m.setStatus("Settings saved", "success")
 		return m, tea.Batch(cmds...)
 
 	case errMsg:
@@ -950,6 +1095,14 @@ func (m *Model) openDownloadsQueue() {
 	m.setStatus("Download queue opened", "info")
 }
 
+func (m *Model) openSettingsPage() {
+	m.state = stateSettings
+	m.settingsCursor = 0
+	m.editingInterval = false
+	m.intervalInput.Blur()
+	m.intervalInput.SetValue(strconv.Itoa(m.settings.PeriodicSyncMins))
+}
+
 func (m *Model) handleDownloadsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 	if key.Matches(msg, m.keys.Close) {
 		m.state = stateBrowse
@@ -977,6 +1130,77 @@ func (m *Model) handleDownloadsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Mo
 	m.queueList, queueCmd = m.queueList.Update(msg)
 	if queueCmd != nil {
 		cmds = append(cmds, queueCmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m Model) handleSettingsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	if m.editingInterval {
+		if key.Matches(msg, m.keys.Close) {
+			m.editingInterval = false
+			m.intervalInput.Blur()
+			m.intervalInput.SetValue(strconv.Itoa(m.settings.PeriodicSyncMins))
+			m.setStatus("Interval edit cancelled", "info")
+			return m, tea.Batch(cmds...)
+		}
+		if key.Matches(msg, m.keys.Submit) {
+			value := strings.TrimSpace(m.intervalInput.Value())
+			minutes, err := strconv.Atoi(value)
+			if err != nil || minutes <= 0 {
+				m.setStatus("Interval must be a positive integer", "warning")
+				return m, tea.Batch(cmds...)
+			}
+			prev := m.settings
+			next := m.settings
+			next.PeriodicSyncMins = minutes
+			m.editingInterval = false
+			m.intervalInput.Blur()
+			cmds = append(cmds, m.persistSettings(next, prev))
+			return m, tea.Batch(cmds...)
+		}
+		var inputCmd tea.Cmd
+		m.intervalInput, inputCmd = m.intervalInput.Update(msg)
+		if inputCmd != nil {
+			cmds = append(cmds, inputCmd)
+		}
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.Close) {
+		m.state = stateBrowse
+		m.setStatus("Returned to library", "info")
+		return m, tea.Batch(cmds...)
+	}
+
+	switch msg.String() {
+	case "up", "k":
+		if m.settingsCursor > 0 {
+			m.settingsCursor--
+		}
+		return m, tea.Batch(cmds...)
+	case "down", "j":
+		if m.settingsCursor < 2 {
+			m.settingsCursor++
+		}
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.Submit) || key.Matches(msg, m.keys.PlayEpisode) {
+		prev := m.settings
+		next := m.settings
+		switch m.settingsCursor {
+		case 0:
+			next.AutoSyncOnStartup = !next.AutoSyncOnStartup
+		case 1:
+			next.PeriodicSync = !next.PeriodicSync
+		case 2:
+			m.editingInterval = true
+			cmds = append(cmds, m.intervalInput.Focus())
+			return m, tea.Batch(cmds...)
+		}
+		cmds = append(cmds, m.persistSettings(next, prev))
+		return m, tea.Batch(cmds...)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -1053,6 +1277,10 @@ func (m Model) renderContent() string {
 		return lipgloss.NewStyle().MaxHeight(max(m.bodyHeight, 1)).Render(m.renderDownloadsPage())
 	}
 
+	if m.state == stateSettings {
+		return lipgloss.NewStyle().MaxHeight(max(m.bodyHeight, 1)).Render(m.renderSettingsPage())
+	}
+
 	if m.loadingLibrary && len(m.list.Items()) == 0 {
 		content := components.RenderLoading(m.theme, m.spin.View(), "Loading library…")
 		return lipgloss.NewStyle().MaxHeight(max(m.bodyHeight, 1)).Render(content)
@@ -1113,6 +1341,50 @@ func (m Model) renderDownloadsPage() string {
 		Height(paneHeight).
 		MaxHeight(paneHeight).
 		Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
+}
+
+func (m Model) renderSettingsPage() string {
+	title := m.theme.SectionTitle.Render("Settings")
+	subtitle := m.theme.MutedText.Render(
+		"Configure startup/periodic sync. Use j/k to move, Enter or Space to toggle/edit.",
+	)
+	panel := m.theme.PanelFocused
+
+	rows := []string{
+		fmt.Sprintf("Auto-sync on startup: %s", onOff(m.settings.AutoSyncOnStartup)),
+		fmt.Sprintf("Periodic sync enabled: %s", onOff(m.settings.PeriodicSync)),
+		fmt.Sprintf("Periodic sync interval (minutes): %d", m.settings.PeriodicSyncMins),
+	}
+
+	for i := range rows {
+		row := rows[i]
+		if i == m.settingsCursor {
+			if i == 2 && m.editingInterval {
+				row = fmt.Sprintf("Periodic sync interval (minutes): %s", m.intervalInput.View())
+			}
+			row = m.theme.Card.Width(max(m.contentWidth()-8, 20)).Render(row)
+		} else {
+			row = m.theme.Body.Render(row)
+		}
+		rows[i] = row
+	}
+
+	hint := m.theme.MutedText.Render("Esc to return. Press ? for help.")
+	content := lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		subtitle,
+		"",
+		rows[0],
+		rows[1],
+		rows[2],
+		"",
+		hint,
+	)
+
+	return panel.Width(max(m.contentWidth()-4, 20)).
+		Height(max(m.bodyHeight, 1)).
+		MaxHeight(max(m.bodyHeight, 1)).
+		Render(content)
 }
 
 func (m Model) renderPodcastPane() string {
@@ -1354,6 +1626,7 @@ func (m Model) renderGuideContent(width int) string {
 			m.theme.Label.Render("r") + "  Refresh selected podcast feed",
 			m.theme.Label.Render("g") + "  Go to episode by number (in detail pane)",
 			m.theme.Label.Render("s") + "  Toggle episode sort order (newest/oldest first)",
+			m.theme.Label.Render("S") + "  Open settings",
 			m.theme.Label.Render("tab") + "  Switch focus between the library and detail panes",
 			m.theme.Label.Render("enter") + "  Confirm actions in dialogs and list filtering",
 			m.theme.Label.Render("esc") + "  Close dialogs or leave this help page",
@@ -1464,6 +1737,13 @@ func suffix(n int) string {
 		return ""
 	}
 	return "s"
+}
+
+func onOff(v bool) string {
+	if v {
+		return "ON"
+	}
+	return "OFF"
 }
 
 func min(a, b int) int {

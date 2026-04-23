@@ -77,7 +77,9 @@ func newTestModel(t *testing.T) Model {
 	downloadService := application.NewDownloadService(repo, "downloads")
 	mockPlayer := &tuiMockPlayer{}
 	playerService := application.NewPlayerService(repo, mockPlayer, nil)
-	return NewModel(podcastService, downloadService, playerService)
+	settings := SyncSettings{PeriodicSyncMins: 60}
+	save := func(SyncSettings) error { return nil }
+	return NewModel(podcastService, downloadService, playerService, settings, save)
 }
 
 func keyMsg(text string, code rune) tea.KeyPressMsg {
@@ -556,5 +558,100 @@ func TestModelToggleEpisodeSortPreservesSelection(t *testing.T) {
 
 	if current.selectedEpisode == nil || current.selectedEpisode.ID != 3 {
 		t.Fatalf("expected selected episode ID 3 after second toggle, got %d", current.selectedEpisode.ID)
+	}
+}
+
+func TestModelSettingsPageOpensAndCloses(t *testing.T) {
+	model := newTestModel(t)
+
+	updated, _ := model.Update(keyMsg("S", 'S'))
+	current := updated.(Model)
+	if current.state != stateSettings {
+		t.Fatalf("expected state %q, got %q", stateSettings, current.state)
+	}
+
+	updated, _ = current.Update(keyMsg("", tea.KeyEsc))
+	current = updated.(Model)
+	if current.state != stateBrowse {
+		t.Fatalf("expected state %q after escape, got %q", stateBrowse, current.state)
+	}
+}
+
+func TestModelSettingsToggleAndIntervalEdit(t *testing.T) {
+	model := newTestModel(t)
+
+	updated, _ := model.Update(keyMsg("S", 'S'))
+	current := updated.(Model)
+
+	updated, cmd := current.Update(keyMsg("", tea.KeyEnter))
+	current = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected settings persist command when toggling startup sync")
+	}
+
+	updated, _ = current.Update(settingsPersistedMsg{
+		settings: SyncSettings{
+			AutoSyncOnStartup: true,
+			PeriodicSync:      false,
+			PeriodicSyncMins:  60,
+		},
+		previous: SyncSettings{
+			AutoSyncOnStartup: false,
+			PeriodicSync:      false,
+			PeriodicSyncMins:  60,
+		},
+	})
+	current = updated.(Model)
+	if !current.settings.AutoSyncOnStartup {
+		t.Fatal("expected startup sync to be enabled")
+	}
+
+	updated, _ = current.Update(keyMsg("j", 'j'))
+	current = updated.(Model)
+	updated, _ = current.Update(keyMsg("", tea.KeyEnter))
+	current = updated.(Model)
+	updated, _ = current.Update(settingsPersistedMsg{
+		settings: SyncSettings{
+			AutoSyncOnStartup: true,
+			PeriodicSync:      true,
+			PeriodicSyncMins:  60,
+		},
+		previous: SyncSettings{
+			AutoSyncOnStartup: true,
+			PeriodicSync:      false,
+			PeriodicSyncMins:  60,
+		},
+	})
+	current = updated.(Model)
+
+	updated, _ = current.Update(keyMsg("j", 'j'))
+	current = updated.(Model)
+	updated, cmd = current.Update(keyMsg("", tea.KeyEnter))
+	current = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected input focus command when entering interval edit mode")
+	}
+	current.intervalInput.SetValue("75")
+	updated, cmd = current.Update(keyMsg("", tea.KeyEnter))
+	current = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected settings persist command when saving interval")
+	}
+
+	updated, _ = current.Update(settingsPersistedMsg{
+		settings: SyncSettings{
+			AutoSyncOnStartup: true,
+			PeriodicSync:      true,
+			PeriodicSyncMins:  75,
+		},
+		previous: SyncSettings{
+			AutoSyncOnStartup: true,
+			PeriodicSync:      true,
+			PeriodicSyncMins:  60,
+		},
+	})
+	current = updated.(Model)
+	if current.settings.PeriodicSyncMins != 75 {
+		t.Fatalf("expected interval 75, got %d", current.settings.PeriodicSyncMins)
 	}
 }

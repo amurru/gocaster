@@ -15,6 +15,13 @@ type PodcastService struct {
 	fetcher FeedParser
 }
 
+type RefreshAllResult struct {
+	TotalPodcasts int
+	Refreshed     int
+	Failed        int
+	NewEpisodes   int
+}
+
 func NewPodcastService(repo domain.PodcastRepository, fetcher FeedParser) *PodcastService {
 	return &PodcastService{
 		repo:    repo,
@@ -95,4 +102,26 @@ func (s *PodcastService) RefreshPodcast(podcastID int64) (int, error) {
 	}
 
 	return newCount, nil
+}
+
+func (s *PodcastService) RefreshAllPodcasts() (RefreshAllResult, error) {
+	var result RefreshAllResult
+
+	podcasts, err := s.repo.FindAll()
+	if err != nil {
+		return result, err
+	}
+
+	result.TotalPodcasts = len(podcasts)
+	for _, podcast := range podcasts {
+		newCount, refreshErr := s.RefreshPodcast(podcast.ID)
+		if refreshErr != nil {
+			result.Failed++
+			continue
+		}
+		result.Refreshed++
+		result.NewEpisodes += newCount
+	}
+
+	return result, nil
 }

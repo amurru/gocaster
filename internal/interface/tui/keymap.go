@@ -20,6 +20,7 @@ type keyMap struct {
 	DownloadEpisode   key.Binding
 	StartDownload     key.Binding
 	RetryDownload     key.Binding
+	Settings          key.Binding
 }
 
 func defaultKeyMap() keyMap {
@@ -92,6 +93,10 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("r"),
 			key.WithHelp("r", "retry"),
 		),
+		Settings: key.NewBinding(
+			key.WithKeys("S"),
+			key.WithHelp("S", "settings"),
+		),
 	}
 }
 
@@ -102,6 +107,7 @@ func (k keyMap) ShortHelp() []key.Binding {
 		k.GoToEpisode,
 		k.ToggleEpisodeSort,
 		k.DownloadQueue,
+		k.Settings,
 		k.SwitchPane,
 		k.PlayEpisode,
 		k.NextEpisode,
@@ -119,6 +125,8 @@ func (k keyMap) FooterShortcuts(state string, focus string) []key.Binding {
 		return []key.Binding{k.Close, k.StartDownload, k.RetryDownload, k.ToggleHelp, k.Quit}
 	case "help":
 		return []key.Binding{k.Close, k.ToggleHelp}
+	case "settings":
+		return []key.Binding{k.Close, k.Submit, k.Settings, k.ToggleHelp, k.Quit}
 	default:
 		if focus == "detail" {
 			return []key.Binding{
@@ -137,6 +145,7 @@ func (k keyMap) FooterShortcuts(state string, focus string) []key.Binding {
 			k.RefreshPodcast,
 			k.SwitchPane,
 			k.DownloadQueue,
+			k.Settings,
 			k.Filter,
 			k.ToggleHelp,
 			k.Quit,
@@ -152,6 +161,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 			k.GoToEpisode,
 			k.ToggleEpisodeSort,
 			k.DownloadQueue,
+			k.Settings,
 			k.SwitchPane,
 			k.PlayEpisode,
 			k.NextEpisode,

@@ -1,6 +1,7 @@
 package application
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -16,6 +17,24 @@ type mockFeedParser struct {
 
 func (m mockFeedParser) Parse(string) (*domain.Podcast, []domain.Episode, error) {
 	return m.podcast, m.episodes, m.err
+}
+
+type mockFeedParserResponse struct {
+	podcast  *domain.Podcast
+	episodes []domain.Episode
+	err      error
+}
+
+type mockFeedParserByURL struct {
+	responses map[string]mockFeedParserResponse
+}
+
+func (m mockFeedParserByURL) Parse(url string) (*domain.Podcast, []domain.Episode, error) {
+	resp, ok := m.responses[url]
+	if !ok {
+		return nil, nil, nil
+	}
+	return resp.podcast, resp.episodes, resp.err
 }
 
 func TestPodcastService_AddPodcastPersistsEpisodes(t *testing.T) {
@@ -174,5 +193,65 @@ func TestPodcastService_RefreshPodcastAddsOnlyNewEpisodes(t *testing.T) {
 
 	if len(stored) != 3 {
 		t.Fatalf("expected 3 total episodes, got %d", len(stored))
+	}
+}
+
+func TestPodcastService_RefreshAllPodcastsAggregatesResults(t *testing.T) {
+	repo, err := persistence.NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	first := &domain.Podcast{Title: "One", FeedURL: "https://example.com/one.xml"}
+	second := &domain.Podcast{Title: "Two", FeedURL: "https://example.com/two.xml"}
+	if err := repo.Save(first); err != nil {
+		t.Fatalf("Save first podcast failed: %v", err)
+	}
+	if err := repo.Save(second); err != nil {
+		t.Fatalf("Save second podcast failed: %v", err)
+	}
+
+	if err := repo.SaveEpisode(&domain.Episode{
+		PodcastID:   first.ID,
+		Title:       "Existing",
+		AudioURL:    "https://example.com/existing.mp3",
+		PublishedAt: time.Now().Add(-24 * time.Hour),
+	}); err != nil {
+		t.Fatalf("SaveEpisode failed: %v", err)
+	}
+
+	parser := mockFeedParserByURL{
+		responses: map[string]mockFeedParserResponse{
+			first.FeedURL: {
+				podcast: first,
+				episodes: []domain.Episode{
+					{Title: "Existing", AudioURL: "https://example.com/existing.mp3"},
+					{Title: "New", AudioURL: "https://example.com/new.mp3"},
+				},
+			},
+			second.FeedURL: {
+				err: errors.New("fetch failed"),
+			},
+		},
+	}
+
+	service := NewPodcastService(repo, parser)
+	result, err := service.RefreshAllPodcasts()
+	if err != nil {
+		t.Fatalf("RefreshAllPodcasts failed: %v", err)
+	}
+
+	if result.TotalPodcasts != 2 {
+		t.Fatalf("expected TotalPodcasts=2, got %d", result.TotalPodcasts)
+	}
+	if result.Refreshed != 1 {
+		t.Fatalf("expected Refreshed=1, got %d", result.Refreshed)
+	}
+	if result.Failed != 1 {
+		t.Fatalf("expected Failed=1, got %d", result.Failed)
+	}
+	if result.NewEpisodes != 1 {
+		t.Fatalf("expected NewEpisodes=1, got %d", result.NewEpisodes)
 	}
 }
