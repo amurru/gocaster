@@ -108,15 +108,17 @@ type allPodcastsSyncedMsg struct {
 }
 
 type settingsPersistedMsg struct {
-	settings SyncSettings
-	previous SyncSettings
+	settings Settings
+	previous Settings
 	err      error
 }
 
-type SyncSettings struct {
+type Settings struct {
 	AutoSyncOnStartup bool
 	PeriodicSync      bool
 	PeriodicSyncMins  int
+	DiscordPresence   bool
+	DiscordClientID   string
 }
 
 type Model struct {
@@ -135,6 +137,7 @@ type Model struct {
 	input         textinput.Model
 	goToInput     textinput.Model
 	intervalInput textinput.Model
+	discordInput  textinput.Model
 	spin          spinner.Model
 	status        string
 	kind          string
@@ -161,10 +164,11 @@ type Model struct {
 	queueList    list.Model
 
 	playbackStatus     domain.PlaybackStatus
-	settings           SyncSettings
-	saveSettings       func(SyncSettings) error
+	settings           Settings
+	saveSettings       func(Settings) error
 	settingsCursor     int
 	editingInterval    bool
+	editingDiscordID   bool
 	syncingAllFeeds    bool
 	nextPeriodicSyncAt time.Time
 }
@@ -173,8 +177,8 @@ func NewModel(
 	svc *application.PodcastService,
 	dsvc *application.DownloadService,
 	psvc *application.PlayerService,
-	settings SyncSettings,
-	saveSettings func(SyncSettings) error,
+	settings Settings,
+	saveSettings func(Settings) error,
 ) Model {
 	if settings.PeriodicSyncMins <= 0 {
 		settings.PeriodicSyncMins = 60
@@ -253,6 +257,14 @@ func NewModel(
 	intervalInput.SetWidth(8)
 	intervalInput.SetValue(strconv.Itoa(settings.PeriodicSyncMins))
 
+	discordInput := textinput.New()
+	discordInput.Prompt = ""
+	discordInput.Placeholder = "Discord Application Client ID"
+	discordInput.CharLimit = 64
+	discordInput.SetVirtualCursor(true)
+	discordInput.SetWidth(36)
+	discordInput.SetValue(settings.DiscordClientID)
+
 	spin := spinner.New(spinner.WithSpinner(spinner.Line))
 	spin.Style = lipgloss.NewStyle().Foreground(theme.Accent)
 
@@ -296,6 +308,7 @@ func NewModel(
 		input:           input,
 		goToInput:       goToInput,
 		intervalInput:   intervalInput,
+		discordInput:    discordInput,
 		spin:            spin,
 		status:          "Ready",
 		kind:            "info",
@@ -370,7 +383,7 @@ func (m Model) syncAllPodcasts(reason string) tea.Cmd {
 	}
 }
 
-func (m Model) persistSettings(next SyncSettings, previous SyncSettings) tea.Cmd {
+func (m Model) persistSettings(next Settings, previous Settings) tea.Cmd {
 	return func() tea.Msg {
 		if m.saveSettings == nil {
 			return settingsPersistedMsg{settings: next, previous: previous}
@@ -511,8 +524,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.state == stateSettings {
 				m.state = stateBrowse
 				m.editingInterval = false
+				m.editingDiscordID = false
 				m.intervalInput.Blur()
+				m.discordInput.Blur()
 				m.intervalInput.SetValue(strconv.Itoa(m.settings.PeriodicSyncMins))
+				m.discordInput.SetValue(m.settings.DiscordClientID)
 				m.setStatus("Returned to library.", "info")
 			} else if m.state == stateBrowse {
 				m.openSettingsPage()
@@ -697,7 +713,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case allPodcastsSyncedMsg:
 		m.syncingAllFeeds = false
 		if m.settings.PeriodicSync {
-			m.nextPeriodicSyncAt = time.Now().Add(time.Duration(m.settings.PeriodicSyncMins) * time.Minute)
+			m.nextPeriodicSyncAt = time.Now().
+				Add(time.Duration(m.settings.PeriodicSyncMins) * time.Minute)
 		}
 		if msg.err != nil {
 			m.setStatus(fmt.Sprintf("Sync failed: %v", msg.err), "error")
@@ -731,12 +748,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.settings = msg.previous
 			m.intervalInput.SetValue(strconv.Itoa(m.settings.PeriodicSyncMins))
+			m.discordInput.SetValue(m.settings.DiscordClientID)
 			m.setStatus(fmt.Sprintf("Settings save failed: %v", msg.err), "error")
 			return m, tea.Batch(cmds...)
 		}
 		m.settings = msg.settings
 		if m.settings.PeriodicSync {
-			m.nextPeriodicSyncAt = time.Now().Add(time.Duration(m.settings.PeriodicSyncMins) * time.Minute)
+			m.nextPeriodicSyncAt = time.Now().
+				Add(time.Duration(m.settings.PeriodicSyncMins) * time.Minute)
 		} else {
 			m.nextPeriodicSyncAt = time.Time{}
 		}
@@ -1099,8 +1118,11 @@ func (m *Model) openSettingsPage() {
 	m.state = stateSettings
 	m.settingsCursor = 0
 	m.editingInterval = false
+	m.editingDiscordID = false
 	m.intervalInput.Blur()
+	m.discordInput.Blur()
 	m.intervalInput.SetValue(strconv.Itoa(m.settings.PeriodicSyncMins))
+	m.discordInput.SetValue(m.settings.DiscordClientID)
 }
 
 func (m *Model) handleDownloadsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
@@ -1167,6 +1189,38 @@ func (m Model) handleSettingsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Mode
 		return m, tea.Batch(cmds...)
 	}
 
+	if m.editingDiscordID {
+		if key.Matches(msg, m.keys.Close) {
+			m.editingDiscordID = false
+			m.discordInput.Blur()
+			m.discordInput.SetValue(m.settings.DiscordClientID)
+			m.setStatus("Discord client ID edit cancelled", "info")
+			return m, tea.Batch(cmds...)
+		}
+		if key.Matches(msg, m.keys.Submit) {
+			prev := m.settings
+			next := m.settings
+			next.DiscordClientID = strings.TrimSpace(m.discordInput.Value())
+			if next.DiscordPresence && next.DiscordClientID == "" {
+				m.setStatus(
+					"Discord client ID is required when Discord presence is enabled",
+					"warning",
+				)
+				return m, tea.Batch(cmds...)
+			}
+			m.editingDiscordID = false
+			m.discordInput.Blur()
+			cmds = append(cmds, m.persistSettings(next, prev))
+			return m, tea.Batch(cmds...)
+		}
+		var inputCmd tea.Cmd
+		m.discordInput, inputCmd = m.discordInput.Update(msg)
+		if inputCmd != nil {
+			cmds = append(cmds, inputCmd)
+		}
+		return m, tea.Batch(cmds...)
+	}
+
 	if key.Matches(msg, m.keys.Close) {
 		m.state = stateBrowse
 		m.setStatus("Returned to library", "info")
@@ -1180,7 +1234,7 @@ func (m Model) handleSettingsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Mode
 		}
 		return m, tea.Batch(cmds...)
 	case "down", "j":
-		if m.settingsCursor < 2 {
+		if m.settingsCursor < 4 {
 			m.settingsCursor++
 		}
 		return m, tea.Batch(cmds...)
@@ -1197,6 +1251,16 @@ func (m Model) handleSettingsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Mode
 		case 2:
 			m.editingInterval = true
 			cmds = append(cmds, m.intervalInput.Focus())
+			return m, tea.Batch(cmds...)
+		case 3:
+			if !next.DiscordPresence && strings.TrimSpace(next.DiscordClientID) == "" {
+				m.setStatus("Set Discord client ID before enabling Discord presence", "warning")
+				return m, tea.Batch(cmds...)
+			}
+			next.DiscordPresence = !next.DiscordPresence
+		case 4:
+			m.editingDiscordID = true
+			cmds = append(cmds, m.discordInput.Focus())
 			return m, tea.Batch(cmds...)
 		}
 		cmds = append(cmds, m.persistSettings(next, prev))
@@ -1346,7 +1410,7 @@ func (m Model) renderDownloadsPage() string {
 func (m Model) renderSettingsPage() string {
 	title := m.theme.SectionTitle.Render("Settings")
 	subtitle := m.theme.MutedText.Render(
-		"Configure startup/periodic sync. Use j/k to move, Enter or Space to toggle/edit.",
+		"Configure sync and Discord presence. Use j/k to move, Enter or Space to toggle/edit.",
 	)
 	panel := m.theme.PanelFocused
 
@@ -1354,6 +1418,8 @@ func (m Model) renderSettingsPage() string {
 		fmt.Sprintf("Auto-sync on startup: %s", onOff(m.settings.AutoSyncOnStartup)),
 		fmt.Sprintf("Periodic sync enabled: %s", onOff(m.settings.PeriodicSync)),
 		fmt.Sprintf("Periodic sync interval (minutes): %d", m.settings.PeriodicSyncMins),
+		fmt.Sprintf("Discord Rich Presence enabled: %s", onOff(m.settings.DiscordPresence)),
+		fmt.Sprintf("Discord client ID: %s", valueOrPlaceholder(m.settings.DiscordClientID)),
 	}
 
 	for i := range rows {
@@ -1361,6 +1427,9 @@ func (m Model) renderSettingsPage() string {
 		if i == m.settingsCursor {
 			if i == 2 && m.editingInterval {
 				row = fmt.Sprintf("Periodic sync interval (minutes): %s", m.intervalInput.View())
+			}
+			if i == 4 && m.editingDiscordID {
+				row = fmt.Sprintf("Discord client ID: %s", m.discordInput.View())
 			}
 			row = m.theme.Card.Width(max(m.contentWidth()-8, 20)).Render(row)
 		} else {
@@ -1377,6 +1446,8 @@ func (m Model) renderSettingsPage() string {
 		rows[0],
 		rows[1],
 		rows[2],
+		rows[3],
+		rows[4],
 		"",
 		hint,
 	)
@@ -1744,6 +1815,14 @@ func onOff(v bool) string {
 		return "ON"
 	}
 	return "OFF"
+}
+
+func valueOrPlaceholder(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "(not set)"
+	}
+	return value
 }
 
 func min(a, b int) int {

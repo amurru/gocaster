@@ -15,9 +15,20 @@ type Config struct {
 	AutoSyncOnStartup bool   `toml:"auto_sync_on_startup"`
 	PeriodicSync      bool   `toml:"periodic_sync_enabled"`
 	PeriodicSyncMins  int    `toml:"periodic_sync_minutes"`
+	DiscordPresence   bool   `toml:"discord_presence_enabled"`
+	DiscordClientID   string `toml:"discord_client_id"`
 }
 
 const defaultPeriodicSyncMins = 60
+
+const (
+	// DefaultDiscordClientID is the official Gocaster Discord application ID.
+	// Users can override it from config/TUI settings.
+	DefaultDiscordClientID = "1496999428605612203"
+	// DefaultDiscordPublicKey is the official Gocaster Discord application public key.
+	// Kept for reference; Discord Rich Presence runtime only requires client ID.
+	DefaultDiscordPublicKey = "b6910d4eead9b118c44fad8079475c5f51aefc362100fdd62b9c14e30f6893fb"
+)
 
 func LoadOrCreate() (Config, error) {
 	dirs, err := getDirs()
@@ -33,6 +44,8 @@ func LoadOrCreate() (Config, error) {
 		AutoSyncOnStartup: false,
 		PeriodicSync:      false,
 		PeriodicSyncMins:  defaultPeriodicSyncMins,
+		DiscordPresence:   false,
+		DiscordClientID:   DefaultDiscordClientID,
 	}
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
@@ -75,6 +88,11 @@ func LoadOrCreate() (Config, error) {
 	if cfg.PeriodicSyncMins <= 0 {
 		fmt.Printf("Warning: periodic_sync_minutes must be greater than zero, using default\n")
 		cfg.PeriodicSyncMins = defaultPeriodicSyncMins
+	}
+	cfg.DiscordClientID = strings.TrimSpace(cfg.DiscordClientID)
+	if cfg.DiscordPresence && cfg.DiscordClientID == "" {
+		fmt.Printf("Warning: discord_presence_enabled requires discord_client_id, disabling Discord presence\n")
+		cfg.DiscordPresence = false
 	}
 
 	return cfg, nil
@@ -161,6 +179,10 @@ func writeDefaultConfig(path string, cfg Config) error {
 func Save(cfg Config) error {
 	if cfg.PeriodicSyncMins <= 0 {
 		return fmt.Errorf("periodic_sync_minutes must be greater than zero")
+	}
+	cfg.DiscordClientID = strings.TrimSpace(cfg.DiscordClientID)
+	if cfg.DiscordPresence && cfg.DiscordClientID == "" {
+		return fmt.Errorf("discord_client_id is required when discord_presence_enabled is true")
 	}
 	dirs, err := getDirs()
 	if err != nil {

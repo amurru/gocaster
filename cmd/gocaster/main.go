@@ -7,6 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/amurru/gocaster/internal/application"
+	"github.com/amurru/gocaster/internal/domain"
 	"github.com/amurru/gocaster/internal/infrastructure/config"
 	"github.com/amurru/gocaster/internal/infrastructure/persistence"
 	"github.com/amurru/gocaster/internal/infrastructure/player"
@@ -45,22 +46,36 @@ func main() {
 
 	// Setup player and broadcaster
 	mpvPlayer := player.NewMPVPlayer()
-	broadcaster, err := system.NewMPRISBroadcaster()
+	mprisBroadcaster, err := system.NewMPRISBroadcaster()
 	if err != nil {
 		log.Printf("Warning: failed to create MPRIS broadcaster: %v", err)
 	}
+	broadcasters := []domain.PlaybackBroadcaster{mprisBroadcaster}
+	if cfg.DiscordPresence {
+		discordBroadcaster, discordErr := system.NewDiscordBroadcaster(cfg.DiscordClientID)
+		if discordErr != nil {
+			log.Printf("Warning: failed to create Discord broadcaster: %v", discordErr)
+		} else {
+			broadcasters = append(broadcasters, discordBroadcaster)
+		}
+	}
+	broadcaster := system.NewCompositeBroadcaster(broadcasters...)
 	playerSvc := application.NewPlayerService(repo, mpvPlayer, broadcaster)
 
 	// UI model
-	settings := tui.SyncSettings{
+	settings := tui.Settings{
 		AutoSyncOnStartup: cfg.AutoSyncOnStartup,
 		PeriodicSync:      cfg.PeriodicSync,
 		PeriodicSyncMins:  cfg.PeriodicSyncMins,
+		DiscordPresence:   cfg.DiscordPresence,
+		DiscordClientID:   cfg.DiscordClientID,
 	}
-	saveSettings := func(next tui.SyncSettings) error {
+	saveSettings := func(next tui.Settings) error {
 		cfg.AutoSyncOnStartup = next.AutoSyncOnStartup
 		cfg.PeriodicSync = next.PeriodicSync
 		cfg.PeriodicSyncMins = next.PeriodicSyncMins
+		cfg.DiscordPresence = next.DiscordPresence
+		cfg.DiscordClientID = next.DiscordClientID
 		return config.Save(cfg)
 	}
 	model := tui.NewModel(podcastSvc, downloadSvc, playerSvc, settings, saveSettings)

@@ -67,6 +67,8 @@ If the config file doesn't exist, it will be created automatically with default 
 | `auto_sync_on_startup` | `false`                        | Refresh all subscribed podcasts when app starts |
 | `periodic_sync_enabled` | `false`                      | Enable automatic periodic refresh while app is open |
 | `periodic_sync_minutes` | `60`                         | Interval in minutes for periodic refresh (must be > 0) |
+| `discord_presence_enabled` | `false`                   | Publish current playback as Discord Rich Presence |
+| `discord_client_id` | `1496999428605612203`           | Discord Application Client ID (override if you want to use your own app) |
 
 **Example config:**
 
@@ -76,11 +78,26 @@ download_path = "/home/user/Downloads/Podcasts"
 auto_sync_on_startup = true
 periodic_sync_enabled = true
 periodic_sync_minutes = 60
+discord_presence_enabled = true
+discord_client_id = "1496999428605612203"
 ```
 
 You can use `~` in paths (e.g., `~/Downloads`), which will be expanded to your home directory.
 
 If a path is not absolute (after resolving `~`), the default will be used and a warning will be logged.
+
+### Discord Rich Presence setup
+
+To show now-playing activity in Discord:
+1. Create a Discord application in the Discord Developer Portal.
+2. Copy its **Client ID** into `discord_client_id` (optional if using Gocaster's default app ID).
+3. Set `discord_presence_enabled = true`.
+
+If Discord is not running or IPC is unavailable, playback continues normally and presence updates are skipped.
+
+Gocaster ships with a baked-in default Discord application:
+- Client ID: `1496999428605612203`
+- Public key: `b6910d4eead9b118c44fad8079475c5f51aefc362100fdd62b9c14e30f6893fb`
 
 - MPV: ensure mpv is installed and available in PATH for the MPV player adapter to work. If you prefer another player, implement the Player domain port and wire it in cmd/gocaster.
 

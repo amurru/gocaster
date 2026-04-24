@@ -77,8 +77,8 @@ func newTestModel(t *testing.T) Model {
 	downloadService := application.NewDownloadService(repo, "downloads")
 	mockPlayer := &tuiMockPlayer{}
 	playerService := application.NewPlayerService(repo, mockPlayer, nil)
-	settings := SyncSettings{PeriodicSyncMins: 60}
-	save := func(SyncSettings) error { return nil }
+	settings := Settings{PeriodicSyncMins: 60}
+	save := func(Settings) error { return nil }
 	return NewModel(podcastService, downloadService, playerService, settings, save)
 }
 
@@ -112,7 +112,12 @@ func TestModelWindowResizeStacksOnNarrowTerminal(t *testing.T) {
 	}
 
 	if resized.listWidth > resized.contentWidth() || resized.detailWidth > resized.contentWidth() {
-		t.Fatalf("expected pane widths within content width %d, got list=%d detail=%d", resized.contentWidth(), resized.listWidth, resized.detailWidth)
+		t.Fatalf(
+			"expected pane widths within content width %d, got list=%d detail=%d",
+			resized.contentWidth(),
+			resized.listWidth,
+			resized.detailWidth,
+		)
 	}
 
 	if resized.list.Width() <= 0 || resized.detail.Width() <= 0 {
@@ -132,7 +137,11 @@ func TestModelWindowResizeKeepsSplitPaneWidthsBounded(t *testing.T) {
 
 	total := resized.listWidth + resized.detailWidth + 1
 	if total > resized.contentWidth() {
-		t.Fatalf("expected split panes within content width %d, got total=%d", resized.contentWidth(), total)
+		t.Fatalf(
+			"expected split panes within content width %d, got total=%d",
+			resized.contentWidth(),
+			total,
+		)
 	}
 }
 
@@ -158,7 +167,12 @@ func TestModelViewHeightStaysWithinWindowAfterResize(t *testing.T) {
 
 		renderedHeight := lipgloss.Height(current.View().Content)
 		if renderedHeight > windowHeight {
-			t.Fatalf("expected rendered height <= %d after resize %d, got %d", windowHeight, i+1, renderedHeight)
+			t.Fatalf(
+				"expected rendered height <= %d after resize %d, got %d",
+				windowHeight,
+				i+1,
+				renderedHeight,
+			)
 		}
 	}
 }
@@ -248,7 +262,11 @@ func TestModelTabSwitchesPaneOnlyInBrowseMode(t *testing.T) {
 	updated, _ = current.Update(keyMsg("", tea.KeyTab))
 	current = updated.(Model)
 	if current.focus != focusDetail {
-		t.Fatalf("expected focus to remain %q while help is open, got %q", focusDetail, current.focus)
+		t.Fatalf(
+			"expected focus to remain %q while help is open, got %q",
+			focusDetail,
+			current.focus,
+		)
 	}
 }
 
@@ -419,9 +437,19 @@ func TestModelToggleEpisodeSortFlipsState(t *testing.T) {
 	}
 	now := time.Now()
 	episodes := []domain.Episode{
-		{ID: 1, PodcastID: podcast.ID, Title: "Episode One", PublishedAt: now.Add(-2 * 24 * time.Hour)},
+		{
+			ID:          1,
+			PodcastID:   podcast.ID,
+			Title:       "Episode One",
+			PublishedAt: now.Add(-2 * 24 * time.Hour),
+		},
 		{ID: 2, PodcastID: podcast.ID, Title: "Episode Two", PublishedAt: now},
-		{ID: 3, PodcastID: podcast.ID, Title: "Episode Three", PublishedAt: now.Add(-1 * 24 * time.Hour)},
+		{
+			ID:          3,
+			PodcastID:   podcast.ID,
+			Title:       "Episode Three",
+			PublishedAt: now.Add(-1 * 24 * time.Hour),
+		},
 	}
 
 	updated, _ := model.Update(podcastsLoadedMsg{podcasts: []domain.Podcast{podcast}})
@@ -449,7 +477,11 @@ func TestModelToggleEpisodeSortFlipsState(t *testing.T) {
 	current = updated.(Model)
 
 	if current.sortOrder != sortNewestFirst {
-		t.Fatalf("expected sort order %q after second toggle, got %q", sortNewestFirst, current.sortOrder)
+		t.Fatalf(
+			"expected sort order %q after second toggle, got %q",
+			sortNewestFirst,
+			current.sortOrder,
+		)
 	}
 
 	if current.status != "Sorting: newest episodes first" {
@@ -466,9 +498,19 @@ func TestModelToggleEpisodeSortOrdersEpisodes(t *testing.T) {
 	}
 	now := time.Now()
 	episodes := []domain.Episode{
-		{ID: 1, PodcastID: podcast.ID, Title: "Episode One", PublishedAt: now.Add(-2 * 24 * time.Hour)},
+		{
+			ID:          1,
+			PodcastID:   podcast.ID,
+			Title:       "Episode One",
+			PublishedAt: now.Add(-2 * 24 * time.Hour),
+		},
 		{ID: 2, PodcastID: podcast.ID, Title: "Episode Two", PublishedAt: now},
-		{ID: 3, PodcastID: podcast.ID, Title: "Episode Three", PublishedAt: now.Add(-1 * 24 * time.Hour)},
+		{
+			ID:          3,
+			PodcastID:   podcast.ID,
+			Title:       "Episode Three",
+			PublishedAt: now.Add(-1 * 24 * time.Hour),
+		},
 	}
 
 	updated, _ := model.Update(podcastsLoadedMsg{podcasts: []domain.Podcast{podcast}})
@@ -504,7 +546,9 @@ func TestModelToggleEpisodeSortIgnoredWhenNoEpisodes(t *testing.T) {
 	updated, _ := model.Update(podcastsLoadedMsg{podcasts: []domain.Podcast{podcast}})
 	current := updated.(Model)
 
-	updated, _ = current.Update(episodesLoadedMsg{podcastID: podcast.ID, episodes: []domain.Episode{}})
+	updated, _ = current.Update(
+		episodesLoadedMsg{podcastID: podcast.ID, episodes: []domain.Episode{}},
+	)
 	current = updated.(Model)
 
 	originalStatus := current.status
@@ -513,10 +557,15 @@ func TestModelToggleEpisodeSortIgnoredWhenNoEpisodes(t *testing.T) {
 	current = updated.(Model)
 
 	if current.sortOrder != sortNewestFirst {
-		t.Fatalf("expected sort order to remain %q when no episodes, got %q", sortNewestFirst, current.sortOrder)
+		t.Fatalf(
+			"expected sort order to remain %q when no episodes, got %q",
+			sortNewestFirst,
+			current.sortOrder,
+		)
 	}
 
-	if current.status == "Sorting: oldest episodes first" || current.status == "Sorting: newest episodes first" {
+	if current.status == "Sorting: oldest episodes first" ||
+		current.status == "Sorting: newest episodes first" {
 		t.Fatalf("expected no sort status change when no episodes, got %q", current.status)
 	}
 
@@ -532,9 +581,19 @@ func TestModelToggleEpisodeSortPreservesSelection(t *testing.T) {
 	}
 	now := time.Now()
 	episodes := []domain.Episode{
-		{ID: 1, PodcastID: podcast.ID, Title: "Episode One", PublishedAt: now.Add(-2 * 24 * time.Hour)},
+		{
+			ID:          1,
+			PodcastID:   podcast.ID,
+			Title:       "Episode One",
+			PublishedAt: now.Add(-2 * 24 * time.Hour),
+		},
 		{ID: 2, PodcastID: podcast.ID, Title: "Episode Two", PublishedAt: now},
-		{ID: 3, PodcastID: podcast.ID, Title: "Episode Three", PublishedAt: now.Add(-1 * 24 * time.Hour)},
+		{
+			ID:          3,
+			PodcastID:   podcast.ID,
+			Title:       "Episode Three",
+			PublishedAt: now.Add(-1 * 24 * time.Hour),
+		},
 	}
 
 	updated, _ := model.Update(podcastsLoadedMsg{podcasts: []domain.Podcast{podcast}})
@@ -550,14 +609,20 @@ func TestModelToggleEpisodeSortPreservesSelection(t *testing.T) {
 	current = updated.(Model)
 
 	if current.selectedEpisode == nil || current.selectedEpisode.ID != 3 {
-		t.Fatalf("expected selected episode ID 3 (same as before sort), got %d", current.selectedEpisode.ID)
+		t.Fatalf(
+			"expected selected episode ID 3 (same as before sort), got %d",
+			current.selectedEpisode.ID,
+		)
 	}
 
 	updated, _ = current.Update(keyMsg("s", 's'))
 	current = updated.(Model)
 
 	if current.selectedEpisode == nil || current.selectedEpisode.ID != 3 {
-		t.Fatalf("expected selected episode ID 3 after second toggle, got %d", current.selectedEpisode.ID)
+		t.Fatalf(
+			"expected selected episode ID 3 after second toggle, got %d",
+			current.selectedEpisode.ID,
+		)
 	}
 }
 
@@ -590,12 +655,12 @@ func TestModelSettingsToggleAndIntervalEdit(t *testing.T) {
 	}
 
 	updated, _ = current.Update(settingsPersistedMsg{
-		settings: SyncSettings{
+		settings: Settings{
 			AutoSyncOnStartup: true,
 			PeriodicSync:      false,
 			PeriodicSyncMins:  60,
 		},
-		previous: SyncSettings{
+		previous: Settings{
 			AutoSyncOnStartup: false,
 			PeriodicSync:      false,
 			PeriodicSyncMins:  60,
@@ -611,12 +676,12 @@ func TestModelSettingsToggleAndIntervalEdit(t *testing.T) {
 	updated, _ = current.Update(keyMsg("", tea.KeyEnter))
 	current = updated.(Model)
 	updated, _ = current.Update(settingsPersistedMsg{
-		settings: SyncSettings{
+		settings: Settings{
 			AutoSyncOnStartup: true,
 			PeriodicSync:      true,
 			PeriodicSyncMins:  60,
 		},
-		previous: SyncSettings{
+		previous: Settings{
 			AutoSyncOnStartup: true,
 			PeriodicSync:      false,
 			PeriodicSyncMins:  60,
@@ -639,12 +704,12 @@ func TestModelSettingsToggleAndIntervalEdit(t *testing.T) {
 	}
 
 	updated, _ = current.Update(settingsPersistedMsg{
-		settings: SyncSettings{
+		settings: Settings{
 			AutoSyncOnStartup: true,
 			PeriodicSync:      true,
 			PeriodicSyncMins:  75,
 		},
-		previous: SyncSettings{
+		previous: Settings{
 			AutoSyncOnStartup: true,
 			PeriodicSync:      true,
 			PeriodicSyncMins:  60,
@@ -653,5 +718,65 @@ func TestModelSettingsToggleAndIntervalEdit(t *testing.T) {
 	current = updated.(Model)
 	if current.settings.PeriodicSyncMins != 75 {
 		t.Fatalf("expected interval 75, got %d", current.settings.PeriodicSyncMins)
+	}
+}
+
+func TestModelSettingsDiscordToggleAndClientIDEdit(t *testing.T) {
+	model := newTestModel(t)
+
+	updated, _ := model.Update(keyMsg("S", 'S'))
+	current := updated.(Model)
+
+	// Move to Discord presence row.
+	updated, _ = current.Update(keyMsg("j", 'j'))
+	current = updated.(Model)
+	updated, _ = current.Update(keyMsg("j", 'j'))
+	current = updated.(Model)
+	updated, _ = current.Update(keyMsg("j", 'j'))
+	current = updated.(Model)
+
+	// Cannot enable Discord without client ID.
+	updated, _ = current.Update(keyMsg("", tea.KeyEnter))
+	current = updated.(Model)
+	if current.settings.DiscordPresence {
+		t.Fatal("expected Discord presence to remain disabled without client ID")
+	}
+
+	// Move to client ID row and edit value.
+	updated, _ = current.Update(keyMsg("j", 'j'))
+	current = updated.(Model)
+	updated, cmd := current.Update(keyMsg("", tea.KeyEnter))
+	current = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected focus command when entering Discord client ID edit mode")
+	}
+	current.discordInput.SetValue("123456789012345678")
+	updated, cmd = current.Update(keyMsg("", tea.KeyEnter))
+	current = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected settings persist command when saving Discord client ID")
+	}
+
+	updated, _ = current.Update(settingsPersistedMsg{
+		settings: Settings{
+			PeriodicSyncMins: 60,
+			DiscordClientID:  "123456789012345678",
+		},
+		previous: Settings{
+			PeriodicSyncMins: 60,
+		},
+	})
+	current = updated.(Model)
+	if current.settings.DiscordClientID != "123456789012345678" {
+		t.Fatalf("expected Discord client ID to be saved, got %q", current.settings.DiscordClientID)
+	}
+
+	// Move back to Discord toggle row and enable.
+	updated, _ = current.Update(keyMsg("k", 'k'))
+	current = updated.(Model)
+	updated, cmd = current.Update(keyMsg("", tea.KeyEnter))
+	current = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected settings persist command when toggling Discord presence")
 	}
 }

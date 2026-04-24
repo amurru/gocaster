@@ -81,6 +81,8 @@ func TestConfigFields(t *testing.T) {
 		AutoSyncOnStartup: true,
 		PeriodicSync:      true,
 		PeriodicSyncMins:  30,
+		DiscordPresence:   true,
+		DiscordClientID:   "123456789012345678",
 	}
 
 	meta, err := toml.Decode(`
@@ -89,6 +91,8 @@ download_path = "/custom/downloads"
 auto_sync_on_startup = true
 periodic_sync_enabled = true
 periodic_sync_minutes = 30
+discord_presence_enabled = true
+discord_client_id = "123456789012345678"
 `, &cfg)
 	if err != nil {
 		t.Fatalf("toml decode failed: %v", err)
@@ -108,6 +112,12 @@ periodic_sync_minutes = 30
 	}
 	if cfg.PeriodicSyncMins != 30 {
 		t.Errorf("periodic_sync_minutes = %d, want %d", cfg.PeriodicSyncMins, 30)
+	}
+	if !cfg.DiscordPresence {
+		t.Error("discord_presence_enabled = false, want true")
+	}
+	if cfg.DiscordClientID != "123456789012345678" {
+		t.Errorf("discord_client_id = %q, want %q", cfg.DiscordClientID, "123456789012345678")
 	}
 
 	if len(meta.Undecoded()) > 0 {
@@ -140,6 +150,12 @@ database_path = "/only/db"
 	if cfg.PeriodicSyncMins != 0 {
 		t.Errorf("periodic_sync_minutes = %d, want 0 when unset", cfg.PeriodicSyncMins)
 	}
+	if cfg.DiscordPresence {
+		t.Error("discord_presence_enabled = true, want false default")
+	}
+	if cfg.DiscordClientID != "" {
+		t.Errorf("discord_client_id = %q, want empty default", cfg.DiscordClientID)
+	}
 }
 
 func TestWriteDefaultConfig(t *testing.T) {
@@ -152,6 +168,8 @@ func TestWriteDefaultConfig(t *testing.T) {
 		AutoSyncOnStartup: true,
 		PeriodicSync:      true,
 		PeriodicSyncMins:  45,
+		DiscordPresence:   true,
+		DiscordClientID:   "987654321098765432",
 	}
 
 	err := writeDefaultConfig(configPath, cfg)
@@ -189,11 +207,27 @@ func TestWriteDefaultConfig(t *testing.T) {
 	if loaded.PeriodicSyncMins != cfg.PeriodicSyncMins {
 		t.Errorf("periodic_sync_minutes in file = %d, want %d", loaded.PeriodicSyncMins, cfg.PeriodicSyncMins)
 	}
+	if loaded.DiscordPresence != cfg.DiscordPresence {
+		t.Errorf("discord_presence_enabled in file = %v, want %v", loaded.DiscordPresence, cfg.DiscordPresence)
+	}
+	if loaded.DiscordClientID != cfg.DiscordClientID {
+		t.Errorf("discord_client_id in file = %q, want %q", loaded.DiscordClientID, cfg.DiscordClientID)
+	}
 }
 
 func TestSaveRejectsInvalidPeriodicSyncMinutes(t *testing.T) {
 	cfg := Config{PeriodicSyncMins: 0}
 	if err := Save(cfg); err == nil {
 		t.Fatal("Save should reject non-positive periodic_sync_minutes")
+	}
+}
+
+func TestSaveRejectsMissingDiscordClientIDWhenPresenceEnabled(t *testing.T) {
+	cfg := Config{
+		PeriodicSyncMins: defaultPeriodicSyncMins,
+		DiscordPresence:  true,
+	}
+	if err := Save(cfg); err == nil {
+		t.Fatal("Save should reject discord_presence_enabled without discord_client_id")
 	}
 }
