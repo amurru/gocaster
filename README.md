@@ -188,7 +188,12 @@ This project is released under the MIT License. See LICENSE for details.
 
 ## Acknowledgements
 
-- Bubble Tea, Bubbles and Lipgloss for the TUI stack
-- gofeed for RSS/Atom parsing
+- **Bubble Tea, Bubbles, and Lipgloss** - Charmbracelet's exceptional TUI framework and components
+- **gofeed** - RSS/Atom feed parsing and aggregation
+- **go-sqlite3** - SQLite database adapter for persistent podcast storage
+- **go-mpv** - MPV media player bindings for audio playback
+- **DBus** - Linux desktop integration via MPRIS protocol for media controls
+- **rich-go** - Discord Rich Presence for now-playing activity
+- **BurntSushi/toml** - TOML configuration file parsing
 
 If you have questions or would like help extending the project (new player backend, alternate persistence, or UI enhancements), open an issue or PR — contributions are welcome!
