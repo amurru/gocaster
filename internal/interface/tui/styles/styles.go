@@ -1,9 +1,13 @@
 package styles
 
 import (
+	"fmt"
 	"image/color"
+	"os"
+	"path/filepath"
 
 	"charm.land/lipgloss/v2"
+	"github.com/BurntSushi/toml"
 )
 
 type Theme struct {
@@ -40,111 +44,28 @@ type Theme struct {
 	Divider         lipgloss.Style
 }
 
+// NewTheme returns the default theme (dark-red)
 func NewTheme() Theme {
-	background := lipgloss.Color("#111315")
-	surface := lipgloss.Color("#1A1D1F")
-	surfaceAlt := lipgloss.Color("#232729")
-	border := lipgloss.Color("#3A403F")
-	accent := lipgloss.Color("#E07A5F")
-	accentSoft := lipgloss.Color("#F2CC8F")
-	text := lipgloss.Color("#F4F1EA")
-	muted := lipgloss.Color("#B8B0A2")
-	success := lipgloss.Color("#81B29A")
-	danger := lipgloss.Color("#E76F51")
-	warning := lipgloss.Color("#F2CC8F")
+	return NewThemeDarkRed()
+}
 
-	return Theme{
-		Background: background,
-		Surface:    surface,
-		SurfaceAlt: surfaceAlt,
-		Border:     border,
-		Accent:     accent,
-		AccentSoft: accentSoft,
-		Text:       text,
-		Muted:      muted,
-		Success:    success,
-		Danger:     danger,
-		Warning:    warning,
-		App: lipgloss.NewStyle().
-			Foreground(text).
-			Padding(1, 2),
-		Header: lipgloss.NewStyle().
-			Foreground(text).
-			Padding(0, 1).
-			Border(lipgloss.NormalBorder(), false, false, true, false).
-			BorderForeground(border).
-			Bold(true),
-		SectionTitle: lipgloss.NewStyle().
-			Foreground(accentSoft).
-			Bold(true),
-		Panel: lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(border).
-			Padding(1),
-		PanelFocused: lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(accent).
-			Padding(1),
-		Card: lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(border).
-			Padding(1),
-		CardSelected: lipgloss.NewStyle().
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(accent).
-			Padding(1),
-		Label: lipgloss.NewStyle().
-			Foreground(accentSoft).
-			Bold(true),
-		Body: lipgloss.NewStyle().
-			Foreground(text),
-		MutedText: lipgloss.NewStyle().
-			Foreground(muted),
-		StatusBar: lipgloss.NewStyle().
-			Foreground(text).
-			Border(lipgloss.NormalBorder(), true, false, false, false).
-			BorderForeground(border).
-			Padding(0, 1),
-		HelpText: lipgloss.NewStyle().
-			Foreground(muted),
-		Badge: lipgloss.NewStyle().
-			Foreground(accentSoft).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(accentSoft).
-			Padding(0, 1),
-		BadgeNew: lipgloss.NewStyle().
-			Foreground(success).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(success).
-			Padding(0, 1).
-			Bold(true),
-		BadgePlayed: lipgloss.NewStyle().
-			Foreground(muted).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(muted).
-			Padding(0, 1),
-		BadgeDownloaded: lipgloss.NewStyle().
-			Foreground(success).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(success).
-			Padding(0, 1),
-		Input: lipgloss.NewStyle().
-			Foreground(text).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(border).
-			Padding(0, 1),
-		InputFocused: lipgloss.NewStyle().
-			Foreground(text).
-			Border(lipgloss.RoundedBorder()).
-			BorderForeground(accent).
-			Padding(0, 1),
-		Modal: lipgloss.NewStyle().
-			Border(lipgloss.DoubleBorder()).
-			BorderForeground(accent).
-			Padding(1, 2),
-		Divider: lipgloss.NewStyle().
-			Foreground(border),
+// LoadTheme attempts to load a theme by name, first checking predefined themes,
+// then custom themes in the config folder. Falls back to dark-red if not found.
+func LoadTheme(themeName string, customThemesDir string) Theme {
+	// Try predefined themes first
+	if theme, ok := GetTheme(themeName); ok {
+		return theme
 	}
+
+	// Try custom themes if themeName is specified and customThemesDir is provided
+	if themeName != "" && customThemesDir != "" {
+		if theme, err := loadCustomTheme(themeName, customThemesDir); err == nil {
+			return theme
+		}
+	}
+
+	// Fallback to default theme silently
+	return NewThemeDarkRed()
 }
 
 func (t Theme) StatusStyle(kind string) lipgloss.Style {
@@ -164,4 +85,36 @@ func (t Theme) StatusStyle(kind string) lipgloss.Style {
 	default:
 		return style
 	}
+}
+
+// loadCustomTheme loads a custom theme from a TOML file in the custom themes directory.
+// It looks for ~/.config/gocaster/themes/{themeName}.toml and parses it.
+// Returns an error if the file doesn't exist or can't be parsed.
+func loadCustomTheme(themeName, customThemesDir string) (Theme, error) {
+	if themeName == "" || customThemesDir == "" {
+		return Theme{}, fmt.Errorf("theme name and custom themes directory required")
+	}
+
+	themePath := fmt.Sprintf("%s.toml", filepath.Join(customThemesDir, themeName))
+
+	// Check if file exists
+	if _, err := os.Stat(themePath); os.IsNotExist(err) {
+		return Theme{}, fmt.Errorf("custom theme file not found: %s", themePath)
+	}
+
+	// Read and parse TOML file
+	var config struct {
+		Theme ThemeConfig `toml:"theme"`
+	}
+
+	if _, err := toml.DecodeFile(themePath, &config); err != nil {
+		return Theme{}, fmt.Errorf("failed to parse theme file %s: %w", themePath, err)
+	}
+
+	// Validate that all required color fields are set
+	if config.Theme.Background == "" || config.Theme.Text == "" {
+		return Theme{}, fmt.Errorf("custom theme %s missing required fields (background, text)", themeName)
+	}
+
+	return config.Theme.ToTheme(), nil
 }

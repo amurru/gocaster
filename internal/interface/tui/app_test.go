@@ -79,7 +79,7 @@ func newTestModel(t *testing.T) Model {
 	playerService := application.NewPlayerService(repo, mockPlayer, nil)
 	settings := Settings{PeriodicSyncMins: 60}
 	save := func(Settings) error { return nil }
-	return NewModel(podcastService, downloadService, playerService, settings, save)
+	return NewModel(podcastService, downloadService, playerService, settings, save, "")
 }
 
 func keyMsg(text string, code rune) tea.KeyPressMsg {

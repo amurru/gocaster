@@ -119,6 +119,7 @@ type Settings struct {
 	PeriodicSyncMins  int
 	DiscordPresence   bool
 	DiscordClientID   string
+	ThemeName         string
 }
 
 type Model struct {
@@ -169,6 +170,10 @@ type Model struct {
 	settingsCursor     int
 	editingInterval    bool
 	editingDiscordID   bool
+	editingTheme       bool
+	themeList          []string
+	selectedThemeIndex int
+	customThemesDir    string
 	syncingAllFeeds    bool
 	nextPeriodicSyncAt time.Time
 }
@@ -179,11 +184,12 @@ func NewModel(
 	psvc *application.PlayerService,
 	settings Settings,
 	saveSettings func(Settings) error,
+	customThemesDir string,
 ) Model {
 	if settings.PeriodicSyncMins <= 0 {
 		settings.PeriodicSyncMins = 60
 	}
-	theme := styles.NewTheme()
+	theme := styles.LoadTheme(settings.ThemeName, customThemesDir)
 	delegate := components.NewPodcastDelegate(theme)
 	episodeDelegate := components.NewEpisodeDelegate(theme)
 	downloadJobDelegate := components.NewDownloadJobDelegate(theme)
@@ -320,6 +326,15 @@ func NewModel(
 		sortOrder:       sortNewestFirst,
 		settings:        settings,
 		saveSettings:    saveSettings,
+		customThemesDir: customThemesDir,
+		themeList: func() []string {
+			themes := styles.GetAllThemes(customThemesDir)
+			return themes
+		}(),
+		selectedThemeIndex: func() int {
+			themes := styles.GetAllThemes(customThemesDir)
+			return findThemeIndex(settings.ThemeName, themes)
+		}(),
 		syncingAllFeeds: settings.AutoSyncOnStartup,
 		nextPeriodicSyncAt: func() time.Time {
 			if settings.PeriodicSync {
@@ -1119,10 +1134,12 @@ func (m *Model) openSettingsPage() {
 	m.settingsCursor = 0
 	m.editingInterval = false
 	m.editingDiscordID = false
+	m.editingTheme = false
 	m.intervalInput.Blur()
 	m.discordInput.Blur()
 	m.intervalInput.SetValue(strconv.Itoa(m.settings.PeriodicSyncMins))
 	m.discordInput.SetValue(m.settings.DiscordClientID)
+	m.selectedThemeIndex = findThemeIndex(m.settings.ThemeName, m.themeList)
 }
 
 func (m *Model) handleDownloadsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
@@ -1221,6 +1238,42 @@ func (m Model) handleSettingsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Mode
 		return m, tea.Batch(cmds...)
 	}
 
+	if m.editingTheme {
+		if key.Matches(msg, m.keys.Close) {
+			m.editingTheme = false
+			m.setStatus("Theme selection cancelled", "info")
+			return m, tea.Batch(cmds...)
+		}
+		if key.Matches(msg, m.keys.Submit) {
+			prev := m.settings
+			next := m.settings
+			next.ThemeName = m.themeList[m.selectedThemeIndex]
+			m.editingTheme = false
+			// Apply theme immediately for preview
+			m.theme = styles.LoadTheme(next.ThemeName, m.customThemesDir)
+			cmds = append(cmds, m.persistSettings(next, prev))
+			m.setStatus(fmt.Sprintf("Theme changed to %s", next.ThemeName), "success")
+			return m, tea.Batch(cmds...)
+		}
+		switch msg.String() {
+		case "left", "h":
+			if m.selectedThemeIndex > 0 {
+				m.selectedThemeIndex--
+				// Apply theme preview
+				m.theme = styles.LoadTheme(m.themeList[m.selectedThemeIndex], m.customThemesDir)
+			}
+			return m, tea.Batch(cmds...)
+		case "right", "l":
+			if m.selectedThemeIndex < len(m.themeList)-1 {
+				m.selectedThemeIndex++
+				// Apply theme preview
+				m.theme = styles.LoadTheme(m.themeList[m.selectedThemeIndex], m.customThemesDir)
+			}
+			return m, tea.Batch(cmds...)
+		}
+		return m, tea.Batch(cmds...)
+	}
+
 	if key.Matches(msg, m.keys.Close) {
 		m.state = stateBrowse
 		m.setStatus("Returned to library", "info")
@@ -1234,7 +1287,7 @@ func (m Model) handleSettingsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Mode
 		}
 		return m, tea.Batch(cmds...)
 	case "down", "j":
-		if m.settingsCursor < 4 {
+		if m.settingsCursor < 5 {
 			m.settingsCursor++
 		}
 		return m, tea.Batch(cmds...)
@@ -1261,6 +1314,11 @@ func (m Model) handleSettingsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Mode
 		case 4:
 			m.editingDiscordID = true
 			cmds = append(cmds, m.discordInput.Focus())
+			return m, tea.Batch(cmds...)
+		case 5:
+			m.editingTheme = true
+			m.selectedThemeIndex = findThemeIndex(m.settings.ThemeName, m.themeList)
+			m.setStatus("Use left/right arrows to preview themes, Enter to confirm, Esc to cancel", "info")
 			return m, tea.Batch(cmds...)
 		}
 		cmds = append(cmds, m.persistSettings(next, prev))
@@ -1410,7 +1468,7 @@ func (m Model) renderDownloadsPage() string {
 func (m Model) renderSettingsPage() string {
 	title := m.theme.SectionTitle.Render("Settings")
 	subtitle := m.theme.MutedText.Render(
-		"Configure sync and Discord presence. Use j/k to move, Enter or Space to toggle/edit.",
+		"Configure sync, Discord presence, and theme. Use j/k to move, Enter or Space to toggle/edit.",
 	)
 	panel := m.theme.PanelFocused
 
@@ -1420,6 +1478,7 @@ func (m Model) renderSettingsPage() string {
 		fmt.Sprintf("Periodic sync interval (minutes): %d", m.settings.PeriodicSyncMins),
 		fmt.Sprintf("Discord Rich Presence enabled: %s", onOff(m.settings.DiscordPresence)),
 		fmt.Sprintf("Discord client ID: %s", valueOrPlaceholder(m.settings.DiscordClientID)),
+		fmt.Sprintf("Theme: %s", m.themeList[m.selectedThemeIndex]),
 	}
 
 	for i := range rows {
@@ -1430,6 +1489,9 @@ func (m Model) renderSettingsPage() string {
 			}
 			if i == 4 && m.editingDiscordID {
 				row = fmt.Sprintf("Discord client ID: %s", m.discordInput.View())
+			}
+			if i == 5 && m.editingTheme {
+				row = fmt.Sprintf("Theme: %s", m.renderThemeSelector())
 			}
 			row = m.theme.Card.Width(max(m.contentWidth()-8, 20)).Render(row)
 		} else {
@@ -1448,6 +1510,7 @@ func (m Model) renderSettingsPage() string {
 		rows[2],
 		rows[3],
 		rows[4],
+		rows[5],
 		"",
 		hint,
 	)
@@ -1856,4 +1919,18 @@ func truncateLines(text string, maxLines int) string {
 		return text
 	}
 	return strings.Join(lines[:maxLines], "\n")
+}
+
+func findThemeIndex(themeName string, themeList []string) int {
+	for i, t := range themeList {
+		if t == themeName {
+			return i
+		}
+	}
+	return 0 // default to first theme
+}
+
+func (m Model) renderThemeSelector() string {
+	current := m.themeList[m.selectedThemeIndex]
+	return current
 }

@@ -17,9 +17,11 @@ type Config struct {
 	PeriodicSyncMins  int    `toml:"periodic_sync_minutes"`
 	DiscordPresence   bool   `toml:"discord_presence_enabled"`
 	DiscordClientID   string `toml:"discord_client_id"`
+	ThemeName         string `toml:"theme_name"`
 }
 
 const defaultPeriodicSyncMins = 60
+const defaultThemeName = "dark-red"
 
 const (
 	// DefaultDiscordClientID is the official Gocaster Discord application ID.
@@ -46,6 +48,7 @@ func LoadOrCreate() (Config, error) {
 		PeriodicSyncMins:  defaultPeriodicSyncMins,
 		DiscordPresence:   false,
 		DiscordClientID:   DefaultDiscordClientID,
+		ThemeName:         defaultThemeName,
 	}
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
@@ -93,6 +96,10 @@ func LoadOrCreate() (Config, error) {
 	if cfg.DiscordPresence && cfg.DiscordClientID == "" {
 		fmt.Printf("Warning: discord_presence_enabled requires discord_client_id, disabling Discord presence\n")
 		cfg.DiscordPresence = false
+	}
+
+	if cfg.ThemeName == "" {
+		cfg.ThemeName = defaultThemeName
 	}
 
 	return cfg, nil
@@ -202,4 +209,13 @@ func EnsureDirs(cfg Config) error {
 	}
 
 	return nil
+}
+
+// GetCustomThemesDir returns the directory where custom themes are stored
+func GetCustomThemesDir() (string, error) {
+	dirs, err := getDirs()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dirs.configDir, "themes"), nil
 }

@@ -62,6 +62,13 @@ func main() {
 	broadcaster := system.NewCompositeBroadcaster(broadcasters...)
 	playerSvc := application.NewPlayerService(repo, mpvPlayer, broadcaster)
 
+	// Get custom themes directory
+	customThemesDir, err := config.GetCustomThemesDir()
+	if err != nil {
+		log.Printf("Warning: failed to determine custom themes directory: %v", err)
+		customThemesDir = ""
+	}
+
 	// UI model
 	settings := tui.Settings{
 		AutoSyncOnStartup: cfg.AutoSyncOnStartup,
@@ -69,6 +76,7 @@ func main() {
 		PeriodicSyncMins:  cfg.PeriodicSyncMins,
 		DiscordPresence:   cfg.DiscordPresence,
 		DiscordClientID:   cfg.DiscordClientID,
+		ThemeName:         cfg.ThemeName,
 	}
 	saveSettings := func(next tui.Settings) error {
 		cfg.AutoSyncOnStartup = next.AutoSyncOnStartup
@@ -76,9 +84,10 @@ func main() {
 		cfg.PeriodicSyncMins = next.PeriodicSyncMins
 		cfg.DiscordPresence = next.DiscordPresence
 		cfg.DiscordClientID = next.DiscordClientID
+		cfg.ThemeName = next.ThemeName
 		return config.Save(cfg)
 	}
-	model := tui.NewModel(podcastSvc, downloadSvc, playerSvc, settings, saveSettings)
+	model := tui.NewModel(podcastSvc, downloadSvc, playerSvc, settings, saveSettings, customThemesDir)
 	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("[☠️] there's been an error: %v", err)
