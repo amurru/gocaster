@@ -28,6 +28,8 @@ const (
 	stateBrowse      viewState = "browse"
 	stateAddPodcast  viewState = "add_podcast"
 	stateGoToEpisode viewState = "go_to_episode"
+	statePlayer      viewState = "player"
+	statePlayerSeek  viewState = "player_seek"
 	stateHelp        viewState = "help"
 	stateDownloads   viewState = "downloads"
 	stateSettings    viewState = "settings"
@@ -101,6 +103,20 @@ type playbackStatusMsg struct {
 	err    error
 }
 
+type playbackToggledMsg struct {
+	err error
+}
+
+type playbackSkippedMsg struct {
+	seconds float64
+	err     error
+}
+
+type playbackSeekedMsg struct {
+	positionSec float64
+	err         error
+}
+
 type allPodcastsSyncedMsg struct {
 	result application.RefreshAllResult
 	err    error
@@ -134,9 +150,11 @@ type Model struct {
 	list          list.Model
 	epList        list.Model
 	detail        viewport.Model
+	playerNotes   viewport.Model
 	guide         viewport.Model
 	input         textinput.Model
 	goToInput     textinput.Model
+	seekInput     textinput.Model
 	intervalInput textinput.Model
 	discordInput  textinput.Model
 	spin          spinner.Model
@@ -160,11 +178,14 @@ type Model struct {
 	episodes        []domain.Episode
 	selectedEpisode *domain.Episode
 	sortOrder       episodeSortOrder
+	previousState   viewState
 
 	downloadJobs []domain.DownloadJob
 	queueList    list.Model
 
 	playbackStatus     domain.PlaybackStatus
+	currentPodcast     *domain.Podcast
+	currentEpisode     *domain.Episode
 	settings           Settings
 	saveSettings       func(Settings) error
 	settingsCursor     int
@@ -235,6 +256,12 @@ func NewModel(
 	detailViewport.MouseWheelEnabled = true
 	detailViewport.MouseWheelDelta = 2
 
+	playerNotesViewport := viewport.New(viewport.WithWidth(0), viewport.WithHeight(0))
+	playerNotesViewport.SoftWrap = true
+	playerNotesViewport.FillHeight = true
+	playerNotesViewport.MouseWheelEnabled = true
+	playerNotesViewport.MouseWheelDelta = 2
+
 	guideViewport := viewport.New(viewport.WithWidth(0), viewport.WithHeight(0))
 	guideViewport.SoftWrap = true
 	guideViewport.FillHeight = true
@@ -254,6 +281,13 @@ func NewModel(
 	goToInput.CharLimit = 6
 	goToInput.SetVirtualCursor(true)
 	goToInput.SetWidth(20)
+
+	seekInput := textinput.New()
+	seekInput.Prompt = ""
+	seekInput.Placeholder = "mm:ss or hh:mm:ss"
+	seekInput.CharLimit = 12
+	seekInput.SetVirtualCursor(true)
+	seekInput.SetWidth(20)
 
 	intervalInput := textinput.New()
 	intervalInput.Prompt = ""
@@ -311,8 +345,10 @@ func NewModel(
 		queueList:       downloadQueueList,
 		detail:          detailViewport,
 		guide:           guideViewport,
+		playerNotes:     playerNotesViewport,
 		input:           input,
 		goToInput:       goToInput,
+		seekInput:       seekInput,
 		intervalInput:   intervalInput,
 		discordInput:    discordInput,
 		spin:            spin,
@@ -438,6 +474,9 @@ func (m Model) retryDownload(jobID int64) tea.Cmd {
 
 func (m Model) playEpisode(episodeID int64) tea.Cmd {
 	return func() tea.Msg {
+		if m.playerService == nil {
+			return episodePlayedMsg{episodeID: episodeID, err: fmt.Errorf("player is unavailable")}
+		}
 		err := m.playerService.PlayEpisode(episodeID)
 		return episodePlayedMsg{episodeID: episodeID, err: err}
 	}
@@ -445,8 +484,45 @@ func (m Model) playEpisode(episodeID int64) tea.Cmd {
 
 func (m Model) fetchPlaybackStatus() tea.Cmd {
 	return func() tea.Msg {
+		if m.playerService == nil {
+			return playbackStatusMsg{err: fmt.Errorf("player is unavailable")}
+		}
 		status, err := m.playerService.PlaybackStatus()
 		return playbackStatusMsg{status: status, err: err}
+	}
+}
+
+func (m Model) togglePlayback() tea.Cmd {
+	return func() tea.Msg {
+		if m.playerService == nil {
+			return playbackToggledMsg{err: fmt.Errorf("player is unavailable")}
+		}
+		err := m.playerService.TogglePlayPause()
+		return playbackToggledMsg{err: err}
+	}
+}
+
+func (m Model) skipPlayback(seconds float64) tea.Cmd {
+	return func() tea.Msg {
+		if m.playerService == nil {
+			return playbackSkippedMsg{seconds: seconds, err: fmt.Errorf("player is unavailable")}
+		}
+		err := m.playerService.Seek(seconds)
+		return playbackSkippedMsg{seconds: seconds, err: err}
+	}
+}
+
+func (m Model) seekPlaybackTo(positionSec float64) tea.Cmd {
+	return func() tea.Msg {
+		if m.playerService == nil {
+			return playbackSeekedMsg{positionSec: positionSec, err: fmt.Errorf("player is unavailable")}
+		}
+		current := m.playbackStatus.PositionSec
+		if current == 0 && m.currentEpisode == nil && m.selectedEpisode == nil {
+			return playbackSeekedMsg{positionSec: positionSec, err: fmt.Errorf("no episode selected")}
+		}
+		err := m.playerService.Seek(positionSec - current)
+		return playbackSeekedMsg{positionSec: positionSec, err: err}
 	}
 }
 
@@ -527,9 +603,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case key.Matches(msg, m.keys.ToggleHelp):
 			if m.state == stateHelp {
-				m.state = stateBrowse
-				m.setStatus("Returned to library.", "info")
+				if m.previousState == "" {
+					m.previousState = stateBrowse
+				}
+				m.state = m.previousState
+				m.setStatus("Returned to previous screen.", "info")
 			} else {
+				m.previousState = m.state
 				m.state = stateHelp
 				m.syncGuideViewport(true)
 				m.setStatus("Help page opened.", "info")
@@ -583,6 +663,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handleSettingsMode(msg, cmds)
 		}
 
+		if m.state == statePlayerSeek {
+			return m.handlePlayerSeekMode(msg, cmds)
+		}
+
+		if m.state == statePlayer {
+			return m.handlePlayerMode(msg, cmds)
+		}
+
 		isFiltering := m.list.FilterState() == list.Filtering ||
 			m.epList.FilterState() == list.Filtering
 
@@ -612,6 +700,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if key.Matches(msg, m.keys.DownloadQueue) && !isFiltering {
 			m.openDownloadsQueue()
 			cmds = append(cmds, m.loadDownloadJobs(), m.spin.Tick)
+			return m, tea.Batch(cmds...)
+		}
+
+		if key.Matches(msg, m.keys.OpenPlayer) && !isFiltering {
+			m.openPlayerPage()
 			return m, tea.Batch(cmds...)
 		}
 
@@ -829,6 +922,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.setStatus(fmt.Sprintf("Playback failed: %v", msg.err), "error")
 		} else {
+			if episode := m.episodeByID(msg.episodeID); episode != nil {
+				m.currentEpisode = episode
+			} else if m.selectedEpisode != nil {
+				episode := *m.selectedEpisode
+				m.currentEpisode = &episode
+			}
+			if m.selectedPodcast != nil {
+				podcast := *m.selectedPodcast
+				m.currentPodcast = &podcast
+			}
+			if m.state == statePlayer {
+				m.syncPlayerViewport(true)
+			}
 			m.setStatus("Playing episode", "success")
 			cmds = append(cmds, m.fetchPlaybackStatus())
 		}
@@ -837,7 +943,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case playbackStatusMsg:
 		if msg.err == nil {
 			m.playbackStatus = msg.status
+			if episode := m.playingEpisodeFromStatus(msg.status); episode != nil {
+				m.currentEpisode = episode
+			}
+			if m.state == statePlayer {
+				m.syncPlayerViewport(false)
+			}
 		}
+		return m, tea.Batch(cmds...)
+
+	case playbackToggledMsg:
+		if msg.err != nil {
+			m.setStatus(fmt.Sprintf("Playback toggle failed: %v", msg.err), "error")
+			return m, tea.Batch(cmds...)
+		}
+		m.setStatus("Playback toggled", "success")
+		cmds = append(cmds, m.fetchPlaybackStatus())
+		return m, tea.Batch(cmds...)
+
+	case playbackSkippedMsg:
+		if msg.err != nil {
+			m.setStatus(fmt.Sprintf("Seek failed: %v", msg.err), "error")
+			return m, tea.Batch(cmds...)
+		}
+		direction := "forward"
+		if msg.seconds < 0 {
+			direction = "back"
+		}
+		m.setStatus(fmt.Sprintf("Skipped %s 15s", direction), "success")
+		cmds = append(cmds, m.fetchPlaybackStatus())
+		return m, tea.Batch(cmds...)
+
+	case playbackSeekedMsg:
+		if msg.err != nil {
+			m.setStatus(fmt.Sprintf("Seek failed: %v", msg.err), "error")
+			return m, tea.Batch(cmds...)
+		}
+		m.setStatus(
+			fmt.Sprintf("Seeked to %s", formatPlaybackTime(msg.positionSec)),
+			"success",
+		)
+		cmds = append(cmds, m.fetchPlaybackStatus())
 		return m, tea.Batch(cmds...)
 	}
 
@@ -984,6 +1130,107 @@ func (m Model) handleGoToEpisodeMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.M
 	return m, tea.Batch(cmds...)
 }
 
+func (m Model) handlePlayerMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.Close) || key.Matches(msg, m.keys.OpenPlayer) {
+		m.state = stateBrowse
+		m.setStatus("Returned to library", "info")
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.ToggleHelp) {
+		m.state = stateHelp
+		m.syncGuideViewport(true)
+		m.setStatus("Help page opened.", "info")
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.SeekToTime) {
+		m.openPlayerSeekModal()
+		cmds = append(cmds, m.seekInput.Focus())
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.TogglePlayPause) {
+		if m.playbackStatus.State == domain.PlaybackStateStopped || m.playbackStatus.State == "" {
+			if episode := m.displayEpisode(); episode != nil {
+				cmds = append(cmds, m.playEpisode(episode.ID))
+				return m, tea.Batch(cmds...)
+			}
+			m.setStatus("No episode available to play", "warning")
+			return m, tea.Batch(cmds...)
+		}
+		if m.playerService == nil {
+			m.setStatus("Player is unavailable", "error")
+			return m, tea.Batch(cmds...)
+		}
+		cmds = append(cmds, m.togglePlayback())
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.SkipBackward) {
+		if m.playbackStatus.State == domain.PlaybackStateStopped {
+			m.setStatus("No episode is playing", "warning")
+			return m, tea.Batch(cmds...)
+		}
+		cmds = append(cmds, m.skipPlayback(-15))
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.SkipForward) {
+		if m.playbackStatus.State == domain.PlaybackStateStopped {
+			m.setStatus("No episode is playing", "warning")
+			return m, tea.Batch(cmds...)
+		}
+		cmds = append(cmds, m.skipPlayback(15))
+		return m, tea.Batch(cmds...)
+	}
+
+	var noteCmd tea.Cmd
+	m.playerNotes, noteCmd = m.playerNotes.Update(msg)
+	if noteCmd != nil {
+		cmds = append(cmds, noteCmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
+func (m Model) handlePlayerSeekMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.Close) {
+		m.state = statePlayer
+		m.seekInput.Blur()
+		m.seekInput.Reset()
+		m.setStatus("Seek cancelled", "info")
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.Submit) {
+		value := strings.TrimSpace(m.seekInput.Value())
+		if value == "" {
+			m.setStatus("Seek time is required", "warning")
+			return m, tea.Batch(cmds...)
+		}
+
+		target, err := parseSeekTime(value)
+		if err != nil {
+			m.setStatus(err.Error(), "warning")
+			return m, tea.Batch(cmds...)
+		}
+
+		m.state = statePlayer
+		m.seekInput.Blur()
+		m.seekInput.Reset()
+		cmds = append(cmds, m.seekPlaybackTo(target))
+		return m, tea.Batch(cmds...)
+	}
+
+	var inputCmd tea.Cmd
+	m.seekInput, inputCmd = m.seekInput.Update(msg)
+	if inputCmd != nil {
+		cmds = append(cmds, inputCmd)
+	}
+	return m, tea.Batch(cmds...)
+}
+
 func (m *Model) resize() {
 	if m.width <= 0 || m.height <= 0 {
 		return
@@ -1023,8 +1270,10 @@ func (m *Model) resize() {
 
 	m.input.SetWidth(min(max(contentWidth-12, 20), 72))
 	m.goToInput.SetWidth(min(max(contentWidth-12, 20), 72))
+	m.seekInput.SetWidth(min(max(contentWidth-12, 20), 72))
 	m.syncDetailViewport(false)
 	m.syncGuideViewport(false)
+	m.syncPlayerViewport(false)
 }
 
 func (m *Model) openAddModal() {
@@ -1037,6 +1286,28 @@ func (m *Model) openGoToEpisodeModal() {
 	m.state = stateGoToEpisode
 	m.goToInput.Reset()
 	m.goToInput.Placeholder = "episode number"
+}
+
+func (m *Model) openPlayerPage() {
+	m.state = statePlayer
+	if m.currentEpisode == nil {
+		if episode := m.displayEpisode(); episode != nil {
+			copy := *episode
+			m.currentEpisode = &copy
+		}
+	}
+	if m.currentPodcast == nil && m.selectedPodcast != nil {
+		copy := *m.selectedPodcast
+		m.currentPodcast = &copy
+	}
+	m.syncPlayerViewport(true)
+	m.setStatus("Player opened", "info")
+}
+
+func (m *Model) openPlayerSeekModal() {
+	m.state = statePlayerSeek
+	m.seekInput.Reset()
+	m.seekInput.Placeholder = "mm:ss or hh:mm:ss"
 }
 
 func (m *Model) toggleFocus() {
@@ -1354,6 +1625,15 @@ func (m Model) View() tea.View {
 		)
 	}
 
+	if m.state == statePlayerSeek {
+		layout = components.RenderModal(
+			m.theme,
+			max(m.width, 80),
+			max(m.height, 24),
+			m.renderPlayerSeekModal(),
+		)
+	}
+
 	view := tea.NewView(layout)
 	view.AltScreen = true
 	view.WindowTitle = "Gocaster"
@@ -1391,6 +1671,10 @@ func (m Model) renderHeader() string {
 }
 
 func (m Model) renderContent() string {
+	if m.state == statePlayer || m.state == statePlayerSeek {
+		return lipgloss.NewStyle().MaxHeight(max(m.bodyHeight, 1)).Render(m.renderPlayerPage())
+	}
+
 	if m.state == stateHelp {
 		return lipgloss.NewStyle().MaxHeight(max(m.bodyHeight, 1)).Render(m.renderHelpPage())
 	}
@@ -1698,6 +1982,23 @@ func (m Model) renderGoToEpisodeModal() string {
 	return strings.Join(body, "\n\n")
 }
 
+func (m Model) renderPlayerSeekModal() string {
+	inputStyle := m.theme.Input
+	if m.seekInput.Focused() {
+		inputStyle = m.theme.InputFocused
+	}
+
+	body := []string{
+		m.theme.SectionTitle.Render("Seek to time"),
+		m.theme.MutedText.Render("Enter a target time like 0:30, 12:45, or 1:02:03."),
+		m.theme.Label.Render("Time"),
+		inputStyle.Render(m.seekInput.View()),
+		m.theme.MutedText.Render("Enter to seek, Esc to cancel"),
+	}
+
+	return strings.Join(body, "\n\n")
+}
+
 func (m Model) renderFooter() string {
 	if m.state == stateHelp {
 		status := lipgloss.JoinHorizontal(lipgloss.Left,
@@ -1750,6 +2051,100 @@ func (m *Model) syncGuideViewport(reset bool) {
 	}
 }
 
+func (m *Model) syncPlayerViewport(reset bool) {
+	width := max(m.contentWidth()-8, 20)
+	height := max(m.bodyHeight-14, 6)
+
+	m.playerNotes.SetWidth(width)
+	m.playerNotes.SetHeight(height)
+	m.playerNotes.SetContent(m.renderPlayerNotesContent(width))
+	if reset {
+		m.playerNotes.GotoTop()
+	}
+}
+
+func (m Model) renderPlayerPage() string {
+	title := m.theme.SectionTitle.Render("Player")
+	subtitle := m.theme.MutedText.Render("Control playback, jump around, and read episode notes.")
+	panel := m.theme.PanelFocused.Width(max(m.contentWidth()-4, 20))
+
+	episode := m.displayEpisode()
+	if episode == nil {
+		return panel.Render(lipgloss.JoinVertical(lipgloss.Left,
+			title,
+			subtitle,
+			"",
+			m.theme.MutedText.Render(
+				"No episode is selected. Go back to the library and press p on an episode, or start playback first.",
+			),
+		))
+	}
+
+	podcastTitle := valueOrPlaceholder("")
+	if m.currentPodcast != nil && m.currentPodcast.Title != "" {
+		podcastTitle = m.currentPodcast.Title
+	} else if m.selectedPodcast != nil {
+		podcastTitle = m.selectedPodcast.Title
+	}
+
+	stateLabel := "stopped"
+	switch m.playbackStatus.State {
+	case domain.PlaybackStatePlaying:
+		stateLabel = "playing"
+	case domain.PlaybackStatePaused:
+		stateLabel = "paused"
+	case domain.PlaybackStateError:
+		stateLabel = "error"
+	}
+
+	progressLine := formatPlaybackTime(m.playbackStatus.PositionSec)
+	if m.playbackStatus.DurationSec > 0 {
+		progressLine = fmt.Sprintf(
+			"%s / %s",
+			formatPlaybackTime(m.playbackStatus.PositionSec),
+			formatPlaybackTime(m.playbackStatus.DurationSec),
+		)
+	}
+
+	progressBar := components.RenderProgressBar(m.theme, m.playbackStatus.ProgressPct, max(m.contentWidth()-12, 24))
+	controls := m.theme.Card.Width(max(m.contentWidth()-8, 20)).Render(strings.Join([]string{
+		lipgloss.JoinHorizontal(lipgloss.Left, m.theme.Label.Render("Episode "), m.theme.Body.Render(episode.Title)),
+		lipgloss.JoinHorizontal(lipgloss.Left, m.theme.Label.Render("Podcast "), m.theme.Body.Render(podcastTitle)),
+		lipgloss.JoinHorizontal(lipgloss.Left, m.theme.Label.Render("State "), m.theme.Body.Render(strings.ToUpper(stateLabel))),
+		lipgloss.JoinHorizontal(lipgloss.Left, m.theme.Label.Render("Progress "), m.theme.Body.Render(progressLine)),
+		progressBar,
+	}, "\n"))
+
+	notesHeading := m.theme.SectionTitle.Render("Episode Notes")
+	notes := m.playerNotes.View()
+	if strings.TrimSpace(episode.Description) == "" {
+		notes = m.theme.MutedText.Render("No episode notes available.")
+	}
+
+	return panel.Render(lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		subtitle,
+		"",
+		controls,
+		"",
+		notesHeading,
+		notes,
+	))
+}
+
+func (m Model) renderPlayerNotesContent(width int) string {
+	episode := m.displayEpisode()
+	if episode == nil {
+		return ""
+	}
+	wrapWidth := max(width-4, 16)
+	description := strings.TrimSpace(episode.Description)
+	if description == "" {
+		return ""
+	}
+	return m.theme.Body.Render(lipgloss.Wrap(description, wrapWidth, ""))
+}
+
 func (m Model) renderGuideContent(width int) string {
 	wrapWidth := max(width-4, 16)
 
@@ -1761,6 +2156,7 @@ func (m Model) renderGuideContent(width int) string {
 			m.theme.Label.Render("g") + "  Go to episode by number (in detail pane)",
 			m.theme.Label.Render("s") + "  Toggle episode sort order (newest/oldest first)",
 			m.theme.Label.Render("S") + "  Open settings",
+			m.theme.Label.Render("p") + "  Open the player screen",
 			m.theme.Label.Render("tab") + "  Switch focus between the library and detail panes",
 			m.theme.Label.Render("enter") + "  Confirm actions in dialogs and list filtering",
 			m.theme.Label.Render("esc") + "  Close dialogs or leave this help page",
@@ -1791,21 +2187,27 @@ func (m Model) renderGuideContent(width int) string {
 				"g",
 			) + " to jump directly to an episode by number.",
 			"6. Press " + m.theme.Label.Render(
+				"p",
+			) + " to open the player screen for the selected episode.",
+			"7. In the player screen, use " + m.theme.Label.Render(
+				"space",
+			) + " to play or pause, " + m.theme.Label.Render("← →") + " to skip 15 seconds, and " + m.theme.Label.Render("t") + " to jump to a specific time.",
+			"8. Press " + m.theme.Label.Render(
 				"enter",
 			) + " or " + m.theme.Label.Render(
 				"space",
 			) + " to play the selected episode.",
-			"7. Episodes show a " + lipgloss.NewStyle().
+			"9. Episodes show a " + lipgloss.NewStyle().
 				Foreground(m.theme.Success).
 				Bold(true).
 				Render("NEW") +
 				" indicator for unplayed episodes and a " + m.theme.MutedText.Render(
 				"PLAYED",
 			) + " indicator for played ones.",
-			"8. Press " + m.theme.Label.Render(
+			"10. Press " + m.theme.Label.Render(
 				"tab",
 			) + " again to return focus to the podcast list.",
-			"9. Press " + m.theme.Label.Render("?") + " any time to revisit this help page.",
+			"11. Press " + m.theme.Label.Render("?") + " any time to revisit this help page.",
 		}, "\n\n")),
 	}
 
@@ -1814,6 +2216,7 @@ func (m Model) renderGuideContent(width int) string {
 		m.theme.Card.Width(wrapWidth).Render(strings.Join([]string{
 			"The left pane is your podcast library.",
 			"The right pane shows the selected podcast description, feed info, and recent episodes.",
+			"The player screen shows the current episode notes, progress, and playback controls.",
 			"Episodes with a " + lipgloss.NewStyle().
 				Foreground(m.theme.Success).
 				Bold(true).
@@ -1864,6 +2267,105 @@ func selectedDownloadJobItem(listModel list.Model) *DownloadJobItem {
 	}
 	job := item
 	return &job
+}
+
+func (m Model) displayEpisode() *domain.Episode {
+	if m.currentEpisode != nil {
+		return m.currentEpisode
+	}
+	if m.selectedEpisode != nil {
+		episode := *m.selectedEpisode
+		return &episode
+	}
+	return nil
+}
+
+func (m Model) episodeByID(episodeID int64) *domain.Episode {
+	for i := range m.episodes {
+		if m.episodes[i].ID == episodeID {
+			episode := m.episodes[i]
+			return &episode
+		}
+	}
+	if m.selectedEpisode != nil && m.selectedEpisode.ID == episodeID {
+		episode := *m.selectedEpisode
+		return &episode
+	}
+	if m.currentEpisode != nil && m.currentEpisode.ID == episodeID {
+		return m.currentEpisode
+	}
+	return nil
+}
+
+func (m Model) playingEpisodeFromStatus(status domain.PlaybackStatus) *domain.Episode {
+	if status.Source == "" {
+		return nil
+	}
+	if m.currentEpisode != nil {
+		if m.currentEpisode.AudioURL == status.Source || m.currentEpisode.LocalPath == status.Source {
+			return m.currentEpisode
+		}
+	}
+	for i := range m.episodes {
+		if m.episodes[i].AudioURL == status.Source || m.episodes[i].LocalPath == status.Source {
+			episode := m.episodes[i]
+			return &episode
+		}
+	}
+	if m.selectedEpisode != nil &&
+		(m.selectedEpisode.AudioURL == status.Source || m.selectedEpisode.LocalPath == status.Source) {
+		episode := *m.selectedEpisode
+		return &episode
+	}
+	return nil
+}
+
+func formatPlaybackTime(seconds float64) string {
+	if seconds < 0 {
+		seconds = 0
+	}
+	total := int(seconds + 0.5)
+	hours := total / 3600
+	minutes := (total % 3600) / 60
+	secs := total % 60
+	if hours > 0 {
+		return fmt.Sprintf("%d:%02d:%02d", hours, minutes, secs)
+	}
+	return fmt.Sprintf("%d:%02d", minutes, secs)
+}
+
+func parseSeekTime(value string) (float64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, fmt.Errorf("time is required")
+	}
+
+	parts := strings.Split(value, ":")
+	if len(parts) == 1 {
+		seconds, err := strconv.Atoi(parts[0])
+		if err != nil || seconds < 0 {
+			return 0, fmt.Errorf("invalid time value")
+		}
+		return float64(seconds), nil
+	}
+
+	if len(parts) != 2 && len(parts) != 3 {
+		return 0, fmt.Errorf("use mm:ss or hh:mm:ss")
+	}
+
+	total := 0
+	multiplier := 1
+	for i := len(parts) - 1; i >= 0; i-- {
+		part := strings.TrimSpace(parts[i])
+		segment, err := strconv.Atoi(part)
+		if err != nil || segment < 0 {
+			return 0, fmt.Errorf("invalid time value")
+		}
+		total += segment * multiplier
+		multiplier *= 60
+	}
+
+	return float64(total), nil
 }
 
 func suffix(n int) string {

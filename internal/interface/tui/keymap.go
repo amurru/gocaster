@@ -9,6 +9,11 @@ type keyMap struct {
 	SwitchPane        key.Binding
 	ToggleHelp        key.Binding
 	Quit              key.Binding
+	OpenPlayer        key.Binding
+	TogglePlayPause   key.Binding
+	SkipBackward      key.Binding
+	SkipForward       key.Binding
+	SeekToTime        key.Binding
 	PlayEpisode       key.Binding
 	NextEpisode       key.Binding
 	PrevEpisode       key.Binding
@@ -48,6 +53,26 @@ func defaultKeyMap() keyMap {
 		Quit: key.NewBinding(
 			key.WithKeys("q", "ctrl+c"),
 			key.WithHelp("q", "quit"),
+		),
+		OpenPlayer: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "player"),
+		),
+		TogglePlayPause: key.NewBinding(
+			key.WithKeys(" "),
+			key.WithHelp("space", "play/pause"),
+		),
+		SkipBackward: key.NewBinding(
+			key.WithKeys("left"),
+			key.WithHelp("←", "skip back 15s"),
+		),
+		SkipForward: key.NewBinding(
+			key.WithKeys("right"),
+			key.WithHelp("→", "skip forward 15s"),
+		),
+		SeekToTime: key.NewBinding(
+			key.WithKeys("t"),
+			key.WithHelp("t", "seek to time"),
 		),
 		PlayEpisode: key.NewBinding(
 			key.WithKeys("enter", " "),
@@ -125,6 +150,10 @@ func (k keyMap) FooterShortcuts(state string, focus string) []key.Binding {
 		return []key.Binding{k.Close, k.StartDownload, k.RetryDownload, k.ToggleHelp, k.Quit}
 	case "help":
 		return []key.Binding{k.Close, k.ToggleHelp}
+	case "player":
+		return []key.Binding{k.Close, k.TogglePlayPause, k.SkipBackward, k.SkipForward, k.SeekToTime, k.ToggleHelp, k.Quit}
+	case "player_seek":
+		return []key.Binding{k.Close, k.Submit, k.ToggleHelp, k.Quit}
 	case "settings":
 		return []key.Binding{k.Close, k.Submit, k.Settings, k.ToggleHelp, k.Quit}
 	default:
@@ -134,6 +163,7 @@ func (k keyMap) FooterShortcuts(state string, focus string) []key.Binding {
 				k.ToggleEpisodeSort,
 				k.DownloadEpisode,
 				k.GoToEpisode,
+				k.OpenPlayer,
 				k.PlayEpisode,
 				k.Filter,
 				k.ToggleHelp,
@@ -146,6 +176,7 @@ func (k keyMap) FooterShortcuts(state string, focus string) []key.Binding {
 			k.SwitchPane,
 			k.DownloadQueue,
 			k.Settings,
+			k.OpenPlayer,
 			k.Filter,
 			k.ToggleHelp,
 			k.Quit,
@@ -163,6 +194,7 @@ func (k keyMap) FullHelp() [][]key.Binding {
 			k.DownloadQueue,
 			k.Settings,
 			k.SwitchPane,
+			k.OpenPlayer,
 			k.PlayEpisode,
 			k.NextEpisode,
 			k.PrevEpisode,

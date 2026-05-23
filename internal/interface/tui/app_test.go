@@ -25,10 +25,15 @@ func (m tuiMockFeedParser) Parse(string) (*domain.Podcast, []domain.Episode, err
 }
 
 type tuiMockPlayer struct {
-	playErr error
+	playErr     error
+	status      domain.PlaybackStatus
+	toggleCount int
+	seekCalls   []float64
 }
 
 func (m *tuiMockPlayer) Play(source string) error {
+	m.status.Source = source
+	m.status.State = domain.PlaybackStatePlaying
 	return m.playErr
 }
 
@@ -41,23 +46,33 @@ func (m *tuiMockPlayer) IsPlaying() bool {
 }
 
 func (m *tuiMockPlayer) Pause() error {
+	m.status.State = domain.PlaybackStatePaused
 	return nil
 }
 
 func (m *tuiMockPlayer) Resume() error {
+	m.status.State = domain.PlaybackStatePlaying
 	return nil
 }
 
 func (m *tuiMockPlayer) TogglePause() error {
+	m.toggleCount++
+	if m.status.State == domain.PlaybackStatePaused {
+		m.status.State = domain.PlaybackStatePlaying
+	} else {
+		m.status.State = domain.PlaybackStatePaused
+	}
 	return nil
 }
 
 func (m *tuiMockPlayer) Seek(seconds float64) error {
+	m.seekCalls = append(m.seekCalls, seconds)
+	m.status.PositionSec += seconds
 	return nil
 }
 
 func (m *tuiMockPlayer) Status() (domain.PlaybackStatus, error) {
-	return domain.PlaybackStatus{}, nil
+	return m.status, nil
 }
 
 func (m *tuiMockPlayer) Close() error {
@@ -80,6 +95,41 @@ func newTestModel(t *testing.T) Model {
 	settings := Settings{PeriodicSyncMins: 60}
 	save := func(Settings) error { return nil }
 	return NewModel(podcastService, downloadService, playerService, settings, save, "")
+}
+
+func newPlayerTestModel(t *testing.T) (Model, *tuiMockPlayer, domain.Podcast, domain.Episode) {
+	t.Helper()
+
+	repo, err := persistence.NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteRepo failed: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	podcastService := application.NewPodcastService(repo, tuiMockFeedParser{})
+	downloadService := application.NewDownloadService(repo, "downloads")
+	mockPlayer := &tuiMockPlayer{}
+	playerService := application.NewPlayerService(repo, mockPlayer, nil)
+	settings := Settings{PeriodicSyncMins: 60}
+	save := func(Settings) error { return nil }
+	model := NewModel(podcastService, downloadService, playerService, settings, save, "")
+
+	podcast := domain.Podcast{
+		ID:          7,
+		Title:       "Syntax",
+		FeedURL:     "https://example.com/feed.xml",
+		Description: "A long description",
+		LastUpdated: time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC),
+	}
+	episode := domain.Episode{
+		ID:          11,
+		PodcastID:   podcast.ID,
+		Title:       "The Player Episode",
+		Description: "Episode notes for the player screen.\n\nThey should be readable.",
+		AudioURL:    "https://example.com/audio.mp3",
+	}
+
+	return model, mockPlayer, podcast, episode
 }
 
 func keyMsg(text string, code rune) tea.KeyPressMsg {
@@ -241,6 +291,81 @@ func TestModelViewRendersHelpAndModalStatesAfterResize(t *testing.T) {
 	modalView := current.View().Content
 	if !strings.Contains(modalView, "Add Podcast") {
 		t.Fatalf("expected modal view to render add dialog, got %q", modalView)
+	}
+}
+
+func TestModelPlayerPageOpensAndCloses(t *testing.T) {
+	model, _, podcast, episode := newPlayerTestModel(t)
+
+	updated, _ := model.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	current := updated.(Model)
+	updated, _ = current.Update(podcastsLoadedMsg{podcasts: []domain.Podcast{podcast}})
+	current = updated.(Model)
+	updated, _ = current.Update(episodesLoadedMsg{podcastID: podcast.ID, episodes: []domain.Episode{episode}})
+	current = updated.(Model)
+	current.epList.Select(0)
+	current.selectedEpisode = &current.episodes[0]
+
+	updated, _ = current.Update(keyMsg("p", 'p'))
+	current = updated.(Model)
+	if current.state != statePlayer {
+		t.Fatalf("expected state %q, got %q", statePlayer, current.state)
+	}
+
+	view := current.View().Content
+	if !strings.Contains(view, "Player") || !strings.Contains(view, episode.Title) {
+		t.Fatalf("expected player view to include episode title, got %q", view)
+	}
+
+	updated, _ = current.Update(keyMsg("", tea.KeyEsc))
+	current = updated.(Model)
+	if current.state != stateBrowse {
+		t.Fatalf("expected state %q after close, got %q", stateBrowse, current.state)
+	}
+}
+
+func TestModelPlayerCommandsSeekRelative(t *testing.T) {
+	model, mockPlayer, _, episode := newPlayerTestModel(t)
+	model.currentEpisode = &episode
+	model.playbackStatus = domain.PlaybackStatus{
+		State:       domain.PlaybackStatePlaying,
+		PositionSec: 60,
+		DurationSec: 300,
+		CanSeek:     true,
+	}
+
+	msg := model.skipPlayback(15)()
+	if _, ok := msg.(playbackSkippedMsg); !ok {
+		t.Fatalf("expected playbackSkippedMsg, got %T", msg)
+	}
+	if len(mockPlayer.seekCalls) != 1 || mockPlayer.seekCalls[0] != 15 {
+		t.Fatalf("expected relative seek of 15s, got %#v", mockPlayer.seekCalls)
+	}
+
+	msg = model.seekPlaybackTo(90)()
+	if _, ok := msg.(playbackSeekedMsg); !ok {
+		t.Fatalf("expected playbackSeekedMsg, got %T", msg)
+	}
+	if len(mockPlayer.seekCalls) != 2 || mockPlayer.seekCalls[1] != 30 {
+		t.Fatalf("expected seek delta of 30s, got %#v", mockPlayer.seekCalls)
+	}
+}
+
+func TestParseSeekTime(t *testing.T) {
+	tests := map[string]float64{
+		"90":      90,
+		"1:30":    90,
+		"1:02:03": 3723,
+	}
+
+	for input, want := range tests {
+		got, err := parseSeekTime(input)
+		if err != nil {
+			t.Fatalf("parseSeekTime(%q) returned error: %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("parseSeekTime(%q) = %v, want %v", input, got, want)
+		}
 	}
 }
 
