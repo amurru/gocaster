@@ -23,18 +23,9 @@ func RenderProgressBar(theme styles.Theme, progress float64, width int) string {
 		progress = 100
 	}
 
-	barWidth := width - 7
-	if barWidth < 4 {
-		barWidth = 4
-	}
+	barWidth := max(width-7, 4)
 
-	filled := int((progress / 100) * float64(barWidth))
-	if filled > barWidth {
-		filled = barWidth
-	}
-	if filled < 0 {
-		filled = 0
-	}
+	filled := max(min(int((progress/100)*float64(barWidth)), barWidth), 0)
 	empty := barWidth - filled
 
 	filledPart := lipgloss.NewStyle().Foreground(theme.Accent).Render(strings.Repeat("█", filled))

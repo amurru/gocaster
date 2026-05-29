@@ -103,7 +103,10 @@ func NewMPRISBroadcaster() (domain.PlaybackBroadcaster, error) {
 	return b, nil
 }
 
-func (b *noOpBroadcaster) PublishState(state domain.PlaybackState, metadata domain.PlaybackMetadata) error {
+func (b *noOpBroadcaster) PublishState(
+	state domain.PlaybackState,
+	metadata domain.PlaybackMetadata,
+) error {
 	return nil
 }
 
@@ -119,7 +122,10 @@ func (b *noOpBroadcaster) SetController(controller domain.PlaybackController) {
 }
 
 func (b *mprisBroadcaster) setup() error {
-	reply, err := b.conn.RequestName(mprisBusName, dbus.NameFlagAllowReplacement|dbus.NameFlagDoNotQueue)
+	reply, err := b.conn.RequestName(
+		mprisBusName,
+		dbus.NameFlagAllowReplacement|dbus.NameFlagDoNotQueue,
+	)
 	if err != nil {
 		return err
 	}
@@ -142,16 +148,22 @@ func (b *mprisBroadcaster) setup() error {
 	b.conn.Export(b, mprisObjectPath, "org.freedesktop.DBus.Introspectable")
 	b.conn.Export(b, mprisObjectPath, "org.freedesktop.DBus.Peer")
 
-	b.conn.Emit(mprisObjectPath, propInterface+".PropertiesChanged", propInterface, map[string]dbus.Variant{
-		"CanQuit":             dbus.MakeVariant(true),
-		"CanRaise":            dbus.MakeVariant(false),
-		"CanSetFullscreen":    dbus.MakeVariant(false),
-		"HasTrackList":        dbus.MakeVariant(false),
-		"Identity":            dbus.MakeVariant("Gocaster"),
-		"DesktopEntry":        dbus.MakeVariant("gocaster"),
-		"SupportedUriSchemes": dbus.MakeVariant([]string{"https", "file"}),
-		"SupportedMimeTypes":  dbus.MakeVariant([]string{}),
-	}, []string{})
+	b.conn.Emit(
+		mprisObjectPath,
+		propInterface+".PropertiesChanged",
+		propInterface,
+		map[string]dbus.Variant{
+			"CanQuit":             dbus.MakeVariant(true),
+			"CanRaise":            dbus.MakeVariant(false),
+			"CanSetFullscreen":    dbus.MakeVariant(false),
+			"HasTrackList":        dbus.MakeVariant(false),
+			"Identity":            dbus.MakeVariant("Gocaster"),
+			"DesktopEntry":        dbus.MakeVariant("gocaster"),
+			"SupportedUriSchemes": dbus.MakeVariant([]string{"https", "file"}),
+			"SupportedMimeTypes":  dbus.MakeVariant([]string{}),
+		},
+		[]string{},
+	)
 
 	return nil
 }
@@ -190,7 +202,10 @@ func (b *mprisBroadcaster) SetController(controller domain.PlaybackController) {
 	b.controller = controller
 }
 
-func (b *mprisBroadcaster) PublishState(state domain.PlaybackState, metadata domain.PlaybackMetadata) error {
+func (b *mprisBroadcaster) PublishState(
+	state domain.PlaybackState,
+	metadata domain.PlaybackMetadata,
+) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -214,7 +229,13 @@ func (b *mprisBroadcaster) PublishState(state domain.PlaybackState, metadata dom
 		playbackStatus["Metadata"] = dbus.MakeVariant(b.buildMetadata(metadata))
 	}
 
-	b.conn.Emit(mprisObjectPath, propInterface+".PropertiesChanged", playerInterface, playbackStatus, []string{})
+	b.conn.Emit(
+		mprisObjectPath,
+		propInterface+".PropertiesChanged",
+		playerInterface,
+		playbackStatus,
+		[]string{},
+	)
 
 	return nil
 }
@@ -246,7 +267,13 @@ func (b *mprisBroadcaster) PublishPosition(positionSec float64, durationSec floa
 	b.duration = durationSec
 
 	position := map[string]dbus.Variant{"Position": dbus.MakeVariant(int64(positionSec * 1e6))}
-	b.conn.Emit(mprisObjectPath, propInterface+".PropertiesChanged", playerInterface, position, []string{})
+	b.conn.Emit(
+		mprisObjectPath,
+		propInterface+".PropertiesChanged",
+		playerInterface,
+		position,
+		[]string{},
+	)
 
 	return nil
 }
@@ -306,7 +333,10 @@ func (b *mprisBroadcaster) Get(iface, prop string) (dbus.Variant, *dbus.Error) {
 	if v, ok := props[prop]; ok {
 		return v, nil
 	}
-	return dbus.Variant{}, dbus.NewError(fmt.Sprintf("org.freedesktop.DBus.Error.InvalidProperty: %s", prop), nil)
+	return dbus.Variant{}, dbus.NewError(
+		fmt.Sprintf("org.freedesktop.DBus.Error.InvalidProperty: %s", prop),
+		nil,
+	)
 }
 
 func (b *mprisBroadcaster) Open() *dbus.Error {
@@ -330,13 +360,13 @@ func (b *mprisBroadcaster) Play() *dbus.Error {
 		status, err := ctrl.Status()
 		if err == nil && status.State == domain.PlaybackStatePaused {
 			if err := ctrl.Resume(); err != nil {
-				return dbus.NewError("org.mpris.MediaPlayer2.Error", []interface{}{err.Error()})
+				return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
 			}
 			return nil
 		}
 
 		if err := ctrl.Play(0); err != nil {
-			return dbus.NewError("org.mpris.MediaPlayer2.Error", []interface{}{err.Error()})
+			return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
 		}
 	}
 	return nil
@@ -348,7 +378,7 @@ func (b *mprisBroadcaster) Pause() *dbus.Error {
 	b.mu.Unlock()
 	if ctrl != nil {
 		if err := ctrl.Pause(); err != nil {
-			return dbus.NewError("org.mpris.MediaPlayer2.Error", []interface{}{err.Error()})
+			return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
 		}
 	}
 	return nil
@@ -360,7 +390,7 @@ func (b *mprisBroadcaster) PlayPause() *dbus.Error {
 	b.mu.Unlock()
 	if ctrl != nil {
 		if err := ctrl.PlayPause(); err != nil {
-			return dbus.NewError("org.mpris.MediaPlayer2.Error", []interface{}{err.Error()})
+			return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
 		}
 	}
 	return nil
@@ -372,7 +402,7 @@ func (b *mprisBroadcaster) Stop() *dbus.Error {
 	b.mu.Unlock()
 	if ctrl != nil {
 		if err := ctrl.Stop(); err != nil {
-			return dbus.NewError("org.mpris.MediaPlayer2.Error", []interface{}{err.Error()})
+			return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
 		}
 	}
 	return nil
@@ -385,7 +415,7 @@ func (b *mprisBroadcaster) Seek(to int64) (int64, *dbus.Error) {
 	if ctrl != nil {
 		positionSec := float64(to) / 1e6
 		if err := ctrl.SeekTo(positionSec); err != nil {
-			return 0, dbus.NewError("org.mpris.MediaPlayer2.Error", []interface{}{err.Error()})
+			return 0, dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
 		}
 	}
 	return to, nil
@@ -397,11 +427,11 @@ func (b *mprisBroadcaster) SetPosition(trackId string, position int64) *dbus.Err
 }
 
 func (b *mprisBroadcaster) Next() *dbus.Error {
-	return dbus.NewError("org.mpris.MediaPlayer2.Error", []interface{}{"Not supported"})
+	return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{"Not supported"})
 }
 
 func (b *mprisBroadcaster) Previous() *dbus.Error {
-	return dbus.NewError("org.mpris.MediaPlayer2.Error", []interface{}{"Not supported"})
+	return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{"Not supported"})
 }
 
 func (b *mprisBroadcaster) Introspect() string {

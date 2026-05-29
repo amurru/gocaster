@@ -515,11 +515,17 @@ func (m Model) skipPlayback(seconds float64) tea.Cmd {
 func (m Model) seekPlaybackTo(positionSec float64) tea.Cmd {
 	return func() tea.Msg {
 		if m.playerService == nil {
-			return playbackSeekedMsg{positionSec: positionSec, err: fmt.Errorf("player is unavailable")}
+			return playbackSeekedMsg{
+				positionSec: positionSec,
+				err:         fmt.Errorf("player is unavailable"),
+			}
 		}
 		current := m.playbackStatus.PositionSec
 		if current == 0 && m.currentEpisode == nil && m.selectedEpisode == nil {
-			return playbackSeekedMsg{positionSec: positionSec, err: fmt.Errorf("no episode selected")}
+			return playbackSeekedMsg{
+				positionSec: positionSec,
+				err:         fmt.Errorf("no episode selected"),
+			}
 		}
 		err := m.playerService.Seek(positionSec - current)
 		return playbackSeekedMsg{positionSec: positionSec, err: err}
@@ -1292,13 +1298,13 @@ func (m *Model) openPlayerPage() {
 	m.state = statePlayer
 	if m.currentEpisode == nil {
 		if episode := m.displayEpisode(); episode != nil {
-			copy := *episode
-			m.currentEpisode = &copy
+			clone := *episode
+			m.currentEpisode = &clone
 		}
 	}
 	if m.currentPodcast == nil && m.selectedPodcast != nil {
-		copy := *m.selectedPodcast
-		m.currentPodcast = &copy
+		clone := *m.selectedPodcast
+		m.currentPodcast = &clone
 	}
 	m.syncPlayerViewport(true)
 	m.setStatus("Player opened", "info")
@@ -1589,7 +1595,10 @@ func (m Model) handleSettingsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Mode
 		case 5:
 			m.editingTheme = true
 			m.selectedThemeIndex = findThemeIndex(m.settings.ThemeName, m.themeList)
-			m.setStatus("Use left/right arrows to preview themes, Enter to confirm, Esc to cancel", "info")
+			m.setStatus(
+				"Use left/right arrows to preview themes, Enter to confirm, Esc to cancel",
+				"info",
+			)
 			return m, tea.Batch(cmds...)
 		}
 		cmds = append(cmds, m.persistSettings(next, prev))
@@ -2106,12 +2115,32 @@ func (m Model) renderPlayerPage() string {
 		)
 	}
 
-	progressBar := components.RenderProgressBar(m.theme, m.playbackStatus.ProgressPct, max(m.contentWidth()-12, 24))
+	progressBar := components.RenderProgressBar(
+		m.theme,
+		m.playbackStatus.ProgressPct,
+		max(m.contentWidth()-12, 24),
+	)
 	controls := m.theme.Card.Width(max(m.contentWidth()-8, 20)).Render(strings.Join([]string{
-		lipgloss.JoinHorizontal(lipgloss.Left, m.theme.Label.Render("Episode "), m.theme.Body.Render(episode.Title)),
-		lipgloss.JoinHorizontal(lipgloss.Left, m.theme.Label.Render("Podcast "), m.theme.Body.Render(podcastTitle)),
-		lipgloss.JoinHorizontal(lipgloss.Left, m.theme.Label.Render("State "), m.theme.Body.Render(strings.ToUpper(stateLabel))),
-		lipgloss.JoinHorizontal(lipgloss.Left, m.theme.Label.Render("Progress "), m.theme.Body.Render(progressLine)),
+		lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			m.theme.Label.Render("Episode "),
+			m.theme.Body.Render(episode.Title),
+		),
+		lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			m.theme.Label.Render("Podcast "),
+			m.theme.Body.Render(podcastTitle),
+		),
+		lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			m.theme.Label.Render("State "),
+			m.theme.Body.Render(strings.ToUpper(stateLabel)),
+		),
+		lipgloss.JoinHorizontal(
+			lipgloss.Left,
+			m.theme.Label.Render("Progress "),
+			m.theme.Body.Render(progressLine),
+		),
 		progressBar,
 	}, "\n"))
 
@@ -2302,7 +2331,8 @@ func (m Model) playingEpisodeFromStatus(status domain.PlaybackStatus) *domain.Ep
 		return nil
 	}
 	if m.currentEpisode != nil {
-		if m.currentEpisode.AudioURL == status.Source || m.currentEpisode.LocalPath == status.Source {
+		if m.currentEpisode.AudioURL == status.Source ||
+			m.currentEpisode.LocalPath == status.Source {
 			return m.currentEpisode
 		}
 	}
