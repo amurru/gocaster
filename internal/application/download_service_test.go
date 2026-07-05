@@ -1,6 +1,8 @@
 package application
 
 import (
+	"bytes"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -248,27 +250,65 @@ func TestDownloadService_FailurePreservesResumeData(t *testing.T) {
 	}
 }
 
-// TestDownloadService_FailurePreservesBytesAfterPartialDownload covers issue #1
-// with a server that streams some bytes then drops the connection: the DB must
-// remember how many bytes were written so a retry resumes from the partial file.
-func TestDownloadService_FailurePreservesBytesAfterPartialDownload(t *testing.T) {
-	// 4 KiB payload, but we close the connection after writing only part of it.
-	payload := strings.Repeat("a", 4096)
-	var requestCount int
+// TestDownloadService_RetriesResumeFromPartialFile covers issue #1's acceptance
+// criterion end-to-end: after a failed download, a retry resumes from the
+// partial .part file rather than restarting from scratch.
+//
+// The server honors Range requests:
+//   - first request (no Range): respond 206 Partial Content for the first half,
+//     then abort the connection so the client sees a short read and the job fails
+//     with SupportsResume persisted.
+//   - second request (Range: bytes=N-): serve the remaining bytes with 206.
+//
+// After retry the final file must equal the full payload and be marked downloaded.
+func TestDownloadService_RetriesResumeFromPartialFile(t *testing.T) {
+	fullPayload := []byte(strings.Repeat("Z", 8192))
+	cutoff := len(fullPayload) / 2 // 4096 bytes served before the first abort
+
+	var requests int32
 	var mu sync.Mutex
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
-		requestCount++
+		requests++
 		mu.Unlock()
-		w.Header().Set("Content-Length", "4096")
-		// Flusher to push a partial body then abort the connection.
-		f := w.(http.Flusher)
-		// Write ~1 KiB then forcibly close so io.Copy on the client side gets a
-		// short read / unexpected EOF.
-		_, _ = w.Write([]byte(payload[:1024]))
-		f.Flush()
-		// Simulate a broken connection by panicking; net/http aborts the response.
-		panic("simulated mid-stream failure")
+
+		rangeHdr := r.Header.Get("Range")
+		if rangeHdr == "" {
+			// First download attempt: advertise the FULL size but stream only
+			// the first half, then drop the connection. The client sees a short
+			// read (io.ErrUnexpectedEOF) and the job fails with the partial
+			// bytes preserved. Accept-Ranges advertises that resume is allowed.
+			w.Header().Set("Content-Length", strconv.Itoa(len(fullPayload)))
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(fullPayload[:cutoff])
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			// Hijack and close to force the unexpected EOF on the client side.
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("server does not support hijacking")
+			}
+			conn, _, _ := hj.Hijack()
+			if conn != nil {
+				_ = conn.Close()
+			}
+			return
+		}
+
+		// Resume request: parse "bytes=N-" and serve the suffix with 206.
+		var start int
+		fmt.Sscanf(rangeHdr, "bytes=%d-", &start)
+		if start < 0 || start > len(fullPayload) {
+			http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		rem := fullPayload[start:]
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, len(fullPayload)-1, len(fullPayload)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(rem)))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(rem)
 	}))
 	defer srv.Close()
 
@@ -280,33 +320,80 @@ func TestDownloadService_FailurePreservesBytesAfterPartialDownload(t *testing.T)
 	if err != nil {
 		t.Fatalf("FindEpisodeByID failed: %v", err)
 	}
+
+	// First attempt: queues and starts the download, which aborts mid-stream.
 	if err := svc.QueueEpisodeDownload(episode.ID); err != nil {
 		t.Fatalf("QueueEpisodeDownload failed: %v", err)
 	}
-
 	job := waitForJobCondition(t, repo, episode.ID, domain.DownloadStatusFailed, 3*time.Second)
 
-	// The job must have failed, but the byte counters should reflect whatever
-	// was written before the failure (NOT reset to 0 by failJob). BytesTotal is
-	// populated from Content-Length (4096).
-	if job.BytesTotal == 0 {
-		t.Errorf("expected BytesTotal to be preserved from Content-Length, got 0")
+	// Issue #1 invariant: byte counters and SupportsResume must be preserved so
+	// the retry can resume. These assertions must be strict (not vacuously true).
+	if job.BytesTotal != int64(len(fullPayload)) {
+		t.Fatalf("BytesTotal = %d, want %d (must be preserved, not wiped)", job.BytesTotal, len(fullPayload))
 	}
-	// BytesDownloaded should equal the actual bytes on disk in the .part file.
+	if job.BytesDownloaded == 0 {
+		t.Fatal("BytesDownloaded = 0; expected partial bytes to be recorded before failure (test would pass vacuously)")
+	}
+	if !job.SupportsResume {
+		t.Fatal("SupportsResume = false after a 206 response; the resume branch is unreachable on retry (issue #1 not fully fixed)")
+	}
+
+	// The .part file must contain exactly the bytes recorded in BytesDownloaded.
+	partSize := fileWithSuffixSize(t, dir, ".part")
+	if partSize != job.BytesDownloaded {
+		t.Fatalf(".part size (%d) != BytesDownloaded (%d)", partSize, job.BytesDownloaded)
+	}
+
+	// Retry: should resume from the partial file and complete.
+	if err := svc.RetryJob(job.ID); err != nil {
+		t.Fatalf("RetryJob failed: %v", err)
+	}
+
+	// Wait for completion (the job is deleted on success).
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		ep, _ := repo.FindEpisodeByID(episode.ID)
+		if ep != nil && ep.IsDownloaded {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	ep, _ := repo.FindEpisodeByID(episode.ID)
+	if ep == nil || !ep.IsDownloaded {
+		t.Fatal("download did not complete after retry")
+	}
+
+	// The final downloaded file must equal the full payload (resume correctness).
+	got, err := os.ReadFile(ep.LocalPath)
+	if err != nil {
+		t.Fatalf("reading final file failed: %v", err)
+	}
+	if !bytes.Equal(got, fullPayload) {
+		t.Fatalf("final file length = %d, want %d (resume produced corrupt/incomplete file)", len(got), len(fullPayload))
+	}
+
+	// No .part file should remain after a successful rename.
+	if partSize := fileWithSuffixSize(t, dir, ".part"); partSize != -1 {
+		t.Errorf("expected .part file to be removed after completion, found %d bytes", partSize)
+	}
+}
+
+// fileWithSuffixSize returns the size of the first file in dir whose name ends
+// with suffix, or -1 if none exists.
+func fileWithSuffixSize(t *testing.T, dir, suffix string) int64 {
+	t.Helper()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		t.Fatalf("ReadDir failed: %v", err)
+		t.Fatalf("ReadDir(%s) failed: %v", dir, err)
 	}
-	var partSize int64
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".part") {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), suffix) {
 			info, _ := e.Info()
-			partSize = info.Size()
+			return info.Size()
 		}
 	}
-	if job.BytesDownloaded != partSize {
-		t.Errorf("BytesDownloaded (%d) should match bytes on disk (%d)", job.BytesDownloaded, partSize)
-	}
+	return -1
 }
 
 // TestDownloadService_ProgressThrottle publishes updates at a steady ~1 MiB
@@ -408,8 +495,12 @@ func TestDownloadService_HTTPClientTimeout(t *testing.T) {
 	dir := t.TempDir()
 	repo := newDownloadTestRepo(t, srv.URL+"/ep.mp3")
 	stallSvc := NewDownloadService(repo, dir)
-	// Shorten the header timeout for the test so it completes quickly.
-	stallSvc.http.Transport.(*http.Transport).ResponseHeaderTimeout = 200 * time.Millisecond
+	// Give this service its own isolated transport with a short header timeout
+	// so the test completes quickly without mutating the shared package-level
+	// downloadTransport (which would leak the 200ms timeout into other tests).
+	stallSvc.http = &http.Client{
+		Transport: &http.Transport{ResponseHeaderTimeout: 200 * time.Millisecond},
+	}
 
 	episode, err := repo.FindEpisodeByID(1)
 	if err != nil {
