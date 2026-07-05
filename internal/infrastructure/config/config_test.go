@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -247,21 +246,15 @@ func TestAudioOutputParsing(t *testing.T) {
 }
 
 func TestAudioOutputDefault(t *testing.T) {
-	// Mirrors the normalization done in LoadOrCreate: empty/whitespace falls
-	// back to the "auto" default so mpv autodetects the audio backend.
-	normalize := func(s string) string {
-		s = strings.TrimSpace(s)
-		if s == "" {
-			return defaultAudioOutput
-		}
-		return s
-	}
 	for _, in := range []string{"", "   ", "\t"} {
-		if got := normalize(in); got != defaultAudioOutput {
+		if got := normalizeAudioOutput(in); got != defaultAudioOutput {
 			t.Errorf("for input %q, normalized = %q, want %q", in, got, defaultAudioOutput)
 		}
 	}
-	if got := normalize("pulse"); got != "pulse" {
+	if got := normalizeAudioOutput("pulse"); got != "pulse" {
 		t.Errorf("for input %q, normalized = %q, want %q", "pulse", got, "pulse")
+	}
+	if got := normalizeAudioOutput("  pipewire  "); got != "pipewire" {
+		t.Errorf("for input %q, normalized = %q, want %q", "  pipewire  ", got, "pipewire")
 	}
 }

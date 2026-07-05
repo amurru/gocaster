@@ -105,12 +105,19 @@ func LoadOrCreate() (Config, error) {
 		cfg.ThemeName = defaultThemeName
 	}
 
-	cfg.AudioOutput = strings.TrimSpace(cfg.AudioOutput)
-	if cfg.AudioOutput == "" {
-		cfg.AudioOutput = defaultAudioOutput
-	}
+	cfg.AudioOutput = normalizeAudioOutput(cfg.AudioOutput)
 
 	return cfg, nil
+}
+
+// normalizeAudioOutput trims surrounding whitespace and falls back to the
+// "auto" default (mpv autodetect) for empty values. Extracted so the defaulting
+// logic is unit-testable independently of LoadOrCreate.
+func normalizeAudioOutput(s string) string {
+	if s = strings.TrimSpace(s); s == "" {
+		return defaultAudioOutput
+	}
+	return s
 }
 
 type dirs struct {
