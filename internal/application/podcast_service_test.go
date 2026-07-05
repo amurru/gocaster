@@ -2,6 +2,7 @@ package application
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -253,5 +254,24 @@ func TestPodcastService_RefreshAllPodcastsAggregatesResults(t *testing.T) {
 	}
 	if result.NewEpisodes != 1 {
 		t.Fatalf("expected NewEpisodes=1, got %d", result.NewEpisodes)
+	}
+
+	// Issue #7: per-feed failures must be surfaced so callers can show which
+	// feeds failed and why, not just a count.
+	if len(result.Failures) != 1 {
+		t.Fatalf("expected 1 failure recorded, got %d", len(result.Failures))
+	}
+	f := result.Failures[0]
+	if f.PodcastID != second.ID {
+		t.Errorf("failure PodcastID = %d, want %d", f.PodcastID, second.ID)
+	}
+	if f.Title != "Two" {
+		t.Errorf("failure Title = %q, want %q", f.Title, "Two")
+	}
+	if f.FeedURL != second.FeedURL {
+		t.Errorf("failure FeedURL = %q, want %q", f.FeedURL, second.FeedURL)
+	}
+	if f.Err == nil || !strings.Contains(f.Err.Error(), "fetch failed") {
+		t.Errorf("failure Err = %v, want an error containing %q", f.Err, "fetch failed")
 	}
 }
