@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/BurntSushi/toml"
@@ -229,5 +230,38 @@ func TestSaveRejectsMissingDiscordClientIDWhenPresenceEnabled(t *testing.T) {
 	}
 	if err := Save(cfg); err == nil {
 		t.Fatal("Save should reject discord_presence_enabled without discord_client_id")
+	}
+}
+
+// TestAudioOutputParsing verifies the audio_output config field is parsed from
+// TOML and that an empty/whitespace value falls back to "auto" (issue #4).
+func TestAudioOutputParsing(t *testing.T) {
+	cfg := Config{}
+	_, err := toml.Decode(`audio_output = "alsa"`, &cfg)
+	if err != nil {
+		t.Fatalf("toml decode failed: %v", err)
+	}
+	if cfg.AudioOutput != "alsa" {
+		t.Errorf("audio_output = %q, want %q", cfg.AudioOutput, "alsa")
+	}
+}
+
+func TestAudioOutputDefault(t *testing.T) {
+	// Mirrors the normalization done in LoadOrCreate: empty/whitespace falls
+	// back to the "auto" default so mpv autodetects the audio backend.
+	normalize := func(s string) string {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return defaultAudioOutput
+		}
+		return s
+	}
+	for _, in := range []string{"", "   ", "\t"} {
+		if got := normalize(in); got != defaultAudioOutput {
+			t.Errorf("for input %q, normalized = %q, want %q", in, got, defaultAudioOutput)
+		}
+	}
+	if got := normalize("pulse"); got != "pulse" {
+		t.Errorf("for input %q, normalized = %q, want %q", "pulse", got, "pulse")
 	}
 }

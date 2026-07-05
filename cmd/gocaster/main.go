@@ -45,7 +45,7 @@ func main() {
 	downloadSvc := application.NewDownloadService(repo, cfg.DownloadPath)
 
 	// Setup player and broadcaster
-	mpvPlayer := player.NewMPVPlayer()
+	mpvPlayer := player.NewMPVPlayer(player.WithAudioOutput(cfg.AudioOutput))
 	mprisBroadcaster, err := system.NewMPRISBroadcaster()
 	if err != nil {
 		log.Printf("Warning: failed to create MPRIS broadcaster: %v", err)

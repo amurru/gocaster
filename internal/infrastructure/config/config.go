@@ -18,10 +18,12 @@ type Config struct {
 	DiscordPresence   bool   `toml:"discord_presence_enabled"`
 	DiscordClientID   string `toml:"discord_client_id"`
 	ThemeName         string `toml:"theme_name"`
+	AudioOutput       string `toml:"audio_output"`
 }
 
 const defaultPeriodicSyncMins = 60
 const defaultThemeName = "dark-red"
+const defaultAudioOutput = "auto"
 
 const (
 	// DefaultDiscordClientID is the official Gocaster Discord application ID.
@@ -49,6 +51,7 @@ func LoadOrCreate() (Config, error) {
 		DiscordPresence:   false,
 		DiscordClientID:   DefaultDiscordClientID,
 		ThemeName:         defaultThemeName,
+		AudioOutput:       defaultAudioOutput,
 	}
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
@@ -100,6 +103,11 @@ func LoadOrCreate() (Config, error) {
 
 	if cfg.ThemeName == "" {
 		cfg.ThemeName = defaultThemeName
+	}
+
+	cfg.AudioOutput = strings.TrimSpace(cfg.AudioOutput)
+	if cfg.AudioOutput == "" {
+		cfg.AudioOutput = defaultAudioOutput
 	}
 
 	return cfg, nil
