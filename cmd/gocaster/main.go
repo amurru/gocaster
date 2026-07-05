@@ -39,6 +39,10 @@ func main() {
 	if err != nil {
 		log.Fatal("fatal: ", err)
 	}
+	// Ensure the SQLite handle is released on every exit path (issue #9). It was
+	// previously never closed, leaking the DB handle.
+	defer repo.Close()
+
 	fetcher := rss.NewFeedFetcher()
 	podcastSvc := application.NewPodcastService(repo, fetcher)
 
@@ -88,11 +92,18 @@ func main() {
 		return config.Save(cfg)
 	}
 	model := tui.NewModel(podcastSvc, downloadSvc, playerSvc, settings, saveSettings, customThemesDir)
+	// Close the player service (which closes the broadcaster and the player) on
+	// every exit path, before repo.Close() runs via its deferred call (issue #9).
+	// playerSvc.Close must run before the DB is closed since shutdown may persist
+	// final playback state, so defer it after the repo defer (defers are LIFO).
+	defer playerSvc.Close()
+
 	p := tea.NewProgram(model)
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("[☠️] there's been an error: %v", err)
 		os.Exit(1)
 	}
-	_ = playerSvc.Close()
-	tea.Quit()
+	// The previously bare tea.Quit() call here was a no-op: tea.Quit is only
+	// meaningful as a command returned from Update, and p.Run() has already
+	// returned. Cleanup happens via the deferred Close calls above.
 }
