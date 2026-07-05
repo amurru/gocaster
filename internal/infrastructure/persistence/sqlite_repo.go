@@ -2,19 +2,84 @@ package persistence
 
 import (
 	"database/sql"
+	"fmt"
+	"sync"
 
 	"github.com/amurru/gocaster/internal/domain"
 	_ "github.com/mattn/go-sqlite3"
+	sqlite3 "github.com/mattn/go-sqlite3"
 )
 
 type SQLiteRepo struct {
 	db *sql.DB
 }
 
+// sqlitePragmas is applied to every connection pooled by database/sql. These
+// are connection-local settings in SQLite, so each pooled connection must run
+// them — applying them once is not enough (issue #5).
+//
+//   - foreign_keys = ON : the schema's ON DELETE CASCADE clauses are otherwise
+//     parsed but never enforced, leaving orphaned episodes/download jobs when a
+//     podcast is deleted.
+//   - busy_timeout = 5000 : a writer blocks readers; without a busy timeout a
+//     contended write fails immediately with "database is locked".
+//
+// journal_mode = WAL is a database-file-level (not connection-local) setting,
+// so it is set once via db.Exec below.
+var sqlitePragmas = []string{
+	"PRAGMA foreign_keys = ON",
+	"PRAGMA busy_timeout = 5000",
+}
+
+// pragmaDriverName is the registered driver variant that applies the
+// connection-local SQLite pragmas via ConnectHook on every pooled connection.
+const pragmaDriverName = "gocaster_sqlite3"
+
+var registerPragmaDriverOnce sync.Once
+
+// registerPragmaDriver registers the sqlite3 driver variant with the pragma
+// ConnectHook exactly once; calling it again is a no-op (sql.Register panics
+// on duplicate names, which would break tests that create multiple repos).
+func registerPragmaDriver() {
+	registerPragmaDriverOnce.Do(func() {
+		sql.Register(pragmaDriverName, &sqlite3.SQLiteDriver{
+			ConnectHook: func(conn *sqlite3.SQLiteConn) error {
+				for _, pragma := range sqlitePragmas {
+					if _, err := conn.Exec(pragma, nil); err != nil {
+						return fmt.Errorf("apply %q: %w", pragma, err)
+					}
+				}
+				return nil
+			},
+		})
+	})
+}
+
 func NewSQLiteRepo(dsn string) (*SQLiteRepo, error) {
-	db, err := sql.Open("sqlite3", dsn)
+	// Register the driver variant whose ConnectHook runs the connection-local
+	// pragmas on every new pooled connection. database/sql may open more
+	// connections as the pool grows; SQLite pragmas like foreign_keys are
+	// per-connection, so a one-shot Exec on the first connection is not enough.
+	registerPragmaDriver()
+
+	db, err := sql.Open(pragmaDriverName, dsn)
 	if err != nil {
 		return nil, err
+	}
+
+	// SQLite serializes writes; a single connection avoids lock contention and
+	// keeps the per-connection pragmas stable.
+	db.SetMaxOpenConns(1)
+	// Never recycle the pooled connection. The ConnectHook would re-apply on a
+	// new connection anyway, but there's no reason to churn for a local DB.
+	db.SetConnMaxLifetime(0)
+
+	// journal_mode is a persistent, database-file-level setting (it survives
+	// across opens), but set it here so a fresh/empty DB is configured too. On
+	// an in-memory database SQLite keeps "memory" mode, which is fine for tests.
+	if _, err := db.Exec("PRAGMA journal_mode = WAL"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("set journal_mode: %w", err)
 	}
 
 	// Run migrations
