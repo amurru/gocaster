@@ -159,12 +159,9 @@ func (d DownloadJobItem) Title() string {
 func (d DownloadJobItem) Description() string {
 	progress := d.Progress()
 	size := formatBytes(d.BytesTotal)
-	errorMsg := ""
-	if d.ErrorMessage != "" && len(d.ErrorMessage) > 40 {
-		errorMsg = d.ErrorMessage[:40] + "…"
-	} else {
-		errorMsg = d.ErrorMessage
-	}
+	// Truncate by rune, not byte, so a multi-byte UTF-8 character at the
+	// boundary isn't split into invalid UTF-8.
+	errorMsg := truncateRunes(d.ErrorMessage, 40)
 
 	// Lead with the podcast title (when known) so the row gives context even
 	// before the status/progress; fall back gracefully when metadata is absent.
@@ -200,6 +197,20 @@ func formatBytes(n int64) string {
 	}
 	suffix := "KMGTPE"
 	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), suffix[exp])
+}
+
+// truncateRunes shortens s to at most maxRunes runes, appending an ellipsis
+// when truncation occurs. It operates on runes rather than bytes so multi-byte
+// UTF-8 sequences are not split (which would produce invalid UTF-8).
+func truncateRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "…"
 }
 
 func (d DownloadJobItem) Progress() string {

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -992,5 +993,30 @@ func TestDownloadJobItemDescriptionNonEmpty(t *testing.T) {
 		if !strings.Contains(desc, want) {
 			t.Errorf("description %q missing %q", desc, want)
 		}
+	}
+}
+
+// TestDownloadJobItemDescriptionTruncatesRunesSafely verifies that a long,
+// multi-byte error message is truncated on a rune boundary (valid UTF-8) rather
+// than mid-byte.
+func TestDownloadJobItemDescriptionTruncatesRunesSafely(t *testing.T) {
+	long := strings.Repeat("é", 60) // each é is 2 bytes
+	item := DownloadJobItem{
+		EpisodeTitle: "Ep",
+		DownloadJob: domain.DownloadJob{
+			Status:       domain.DownloadStatusFailed,
+			ErrorMessage: long,
+		},
+	}
+	got := truncateRunes(long, 40)
+	if !utf8.ValidString(got) {
+		t.Errorf("truncated message is not valid UTF-8: %q", got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("expected ellipsis suffix, got %q", got)
+	}
+	// The description must also remain valid UTF-8.
+	if !utf8.ValidString(item.Description()) {
+		t.Error("description is not valid UTF-8")
 	}
 }
