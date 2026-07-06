@@ -17,6 +17,18 @@ import (
 )
 
 func main() {
+	// run() holds all setup and the program loop so that deferred cleanup
+	// (repo.Close, playerSvc.Close) actually unwinds before os.Exit. A bare
+	// os.Exit(1) inside the body would skip the defers, defeating the
+	// resource-cleanup fix (issue #9); returning an error lets main exit
+	// non-zero only after defers have run.
+	if err := run(); err != nil {
+		fmt.Printf("[☠️] there's been an error: %v", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	// Set-up debug logging
 	if len(os.Getenv("DEBUG")) > 0 {
 		f, err := tea.LogToFile("debug.log", "debug")
@@ -99,11 +111,11 @@ func main() {
 	defer playerSvc.Close()
 
 	p := tea.NewProgram(model)
-	if _, err := p.Run(); err != nil {
-		fmt.Printf("[☠️] there's been an error: %v", err)
-		os.Exit(1)
-	}
-	// The previously bare tea.Quit() call here was a no-op: tea.Quit is only
-	// meaningful as a command returned from Update, and p.Run() has already
+	// The previously bare tea.Quit() call after Run() was a no-op: tea.Quit is
+	// only meaningful as a command returned from Update, and Run() has already
 	// returned. Cleanup happens via the deferred Close calls above.
+	if _, err := p.Run(); err != nil {
+		return err
+	}
+	return nil
 }
