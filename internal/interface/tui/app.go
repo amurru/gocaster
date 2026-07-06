@@ -855,10 +855,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if title == "" {
 					title = f.FeedURL
 				}
+				// Keep the full error; the overall 160-char cap below shortens
+				// the summary. Truncating at the first colon would mangle common
+				// network errors (e.g. `Get "https://…": dial tcp: …` -> `Get "https`).
 				reason := f.Err.Error()
-				if i := strings.Index(reason, ":"); i > 0 {
-					reason = reason[:i]
-				}
 				parts = append(parts, fmt.Sprintf("%s: %s", title, reason))
 			}
 			failureSummary = " — " + strings.Join(parts, "; ")
