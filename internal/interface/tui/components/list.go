@@ -1,8 +1,6 @@
 package components
 
 import (
-	"strings"
-
 	"charm.land/bubbles/v2/list"
 	"github.com/amurru/gocaster/internal/interface/tui/styles"
 )
@@ -94,15 +92,4 @@ func NewDownloadJobDelegate(theme styles.Theme) list.DefaultDelegate {
 		Foreground(theme.Accent)
 
 	return delegate
-}
-
-func TruncateDescription(value string, maxLen int) string {
-	text := strings.TrimSpace(strings.ReplaceAll(value, "\n", " "))
-	if len(text) <= maxLen {
-		return text
-	}
-	if maxLen <= 1 {
-		return text[:maxLen]
-	}
-	return text[:maxLen-1] + "…"
 }

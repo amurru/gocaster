@@ -4,23 +4,9 @@ package system
 
 import "github.com/amurru/gocaster/internal/domain"
 
-type noOpBroadcaster struct{}
-
+// NewMPRISBroadcaster returns a no-op broadcaster on non-Linux platforms.
+// MPRIS/D-Bus is Linux-only; everywhere else playback state is simply not
+// published. The shared noOpBroadcaster type is defined in mpris_broadcaster.go.
 func NewMPRISBroadcaster() (domain.PlaybackBroadcaster, error) {
 	return &noOpBroadcaster{}, nil
-}
-
-func (b *noOpBroadcaster) PublishState(state domain.PlaybackState, metadata domain.PlaybackMetadata) error {
-	return nil
-}
-
-func (b *noOpBroadcaster) PublishPosition(positionSec float64, durationSec float64) error {
-	return nil
-}
-
-func (b *noOpBroadcaster) Close() error {
-	return nil
-}
-
-func (b *noOpBroadcaster) SetController(controller domain.PlaybackController) {
 }

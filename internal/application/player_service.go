@@ -177,19 +177,6 @@ func (s *PlayerService) broadcastState() {
 	_ = s.broadcaster.PublishState(status.State, metadata)
 }
 
-func (s *PlayerService) broadcastPosition() {
-	if s.broadcaster == nil {
-		return
-	}
-
-	status, err := s.player.Status()
-	if err != nil {
-		return
-	}
-
-	_ = s.broadcaster.PublishPosition(status.PositionSec, status.DurationSec)
-}
-
 func (s *PlayerService) Play(episodeID int64) error {
 	if episodeID == 0 {
 		s.mu.Lock()

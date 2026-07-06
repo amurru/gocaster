@@ -87,8 +87,6 @@ type mprisBroadcaster struct {
 	wg   sync.WaitGroup
 }
 
-type noOpBroadcaster struct{}
-
 func NewMPRISBroadcaster() (domain.PlaybackBroadcaster, error) {
 	conn, err := dbus.SessionBus()
 	if err != nil {
@@ -110,24 +108,6 @@ func NewMPRISBroadcaster() (domain.PlaybackBroadcaster, error) {
 	go b.positionUpdater()
 
 	return b, nil
-}
-
-func (b *noOpBroadcaster) PublishState(
-	state domain.PlaybackState,
-	metadata domain.PlaybackMetadata,
-) error {
-	return nil
-}
-
-func (b *noOpBroadcaster) PublishPosition(positionSec float64, durationSec float64) error {
-	return nil
-}
-
-func (b *noOpBroadcaster) Close() error {
-	return nil
-}
-
-func (b *noOpBroadcaster) SetController(controller domain.PlaybackController) {
 }
 
 func (b *mprisBroadcaster) setup() error {
