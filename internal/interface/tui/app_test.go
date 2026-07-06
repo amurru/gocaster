@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"charm.land/bubbles/v2/list"
 	tea "charm.land/bubbletea/v2"
@@ -903,5 +904,119 @@ func TestModelSettingsDiscordToggleAndClientIDEdit(t *testing.T) {
 	current = updated.(Model)
 	if cmd == nil {
 		t.Fatal("expected settings persist command when toggling Discord presence")
+	}
+}
+
+// TestModelDownloadJobsShowEpisodeTitles covers issue #10: the download queue
+// rows must show the episode title, not a blank, because DownloadJobItem
+// .EpisodeTitle is now populated from the resolved episode via
+// ListJobsWithEpisodes.
+func TestModelDownloadJobsShowEpisodeTitles(t *testing.T) {
+	// Build the model with a repo we can seed, mirroring newTestModel.
+	repo, err := persistence.NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteRepo failed: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	podcastService := application.NewPodcastService(repo, tuiMockFeedParser{})
+	downloadService := application.NewDownloadService(repo, "downloads")
+	playerService := application.NewPlayerService(repo, &tuiMockPlayer{}, nil)
+	model := NewModel(podcastService, downloadService, playerService, Settings{PeriodicSyncMins: 60}, func(Settings) error { return nil }, "")
+
+	// Seed a podcast + episode + queued download job.
+	podcast := &domain.Podcast{Title: "Test Pod", FeedURL: "https://example.com/p.xml"}
+	if err := repo.Save(podcast); err != nil {
+		t.Fatalf("Save podcast: %v", err)
+	}
+	episode := &domain.Episode{
+		PodcastID: podcast.ID,
+		Title:     "My Cool Episode",
+		AudioURL:  "https://example.com/ep.mp3",
+	}
+	if err := repo.SaveEpisode(episode); err != nil {
+		t.Fatalf("SaveEpisode: %v", err)
+	}
+	job := &domain.DownloadJob{EpisodeID: episode.ID, Status: domain.DownloadStatusQueued}
+	if err := repo.SaveDownloadJob(job); err != nil {
+		t.Fatalf("SaveDownloadJob: %v", err)
+	}
+
+	// Resolve the title via the service to confirm the enrichment works.
+	views, err := downloadService.ListJobsWithEpisodes()
+	if err != nil {
+		t.Fatalf("ListJobsWithEpisodes: %v", err)
+	}
+	if len(views) != 1 || views[0].EpisodeTitle != "My Cool Episode" {
+		t.Fatalf("expected resolved episode title, got %+v", views)
+	}
+
+	// Drive the model through the downloadJobsLoadedMsg and confirm the queue
+	// list item carries the title (Title() returns EpisodeTitle, issue #10).
+	current := model
+	current.state = stateDownloads
+	updated, _ := current.Update(downloadJobsLoadedMsg{jobs: views})
+	m := updated.(Model)
+	items := m.queueList.Items()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 queue item, got %d", len(items))
+	}
+	di, ok := items[0].(DownloadJobItem)
+	if !ok {
+		t.Fatalf("expected DownloadJobItem, got %T", items[0])
+	}
+	if di.Title() != "My Cool Episode" {
+		t.Errorf("queue item title = %q, want %q (blank titles bug, issue #10)", di.Title(), "My Cool Episode")
+	}
+	if di.PodcastTitle != "Test Pod" {
+		t.Errorf("queue item podcast title = %q, want %q", di.PodcastTitle, "Test Pod")
+	}
+}
+
+// TestDownloadJobItemDescriptionNonEmpty verifies the description renders
+// meaningful info (podcast title, size, status) and is never blank.
+func TestDownloadJobItemDescriptionNonEmpty(t *testing.T) {
+	item := DownloadJobItem{
+		EpisodeTitle: "Ep",
+		PodcastTitle: "Pod",
+		DownloadJob: domain.DownloadJob{
+			Status:          domain.DownloadStatusDownloading,
+			BytesDownloaded: 5_000_000,
+			BytesTotal:      10_000_000,
+		},
+	}
+	desc := item.Description()
+	if desc == "" {
+		t.Fatal("expected non-empty description")
+	}
+	for _, want := range []string{"Pod", "DOWNLOADING"} {
+		if !strings.Contains(desc, want) {
+			t.Errorf("description %q missing %q", desc, want)
+		}
+	}
+}
+
+// TestDownloadJobItemDescriptionTruncatesRunesSafely verifies that a long,
+// multi-byte error message is truncated on a rune boundary (valid UTF-8) rather
+// than mid-byte.
+func TestDownloadJobItemDescriptionTruncatesRunesSafely(t *testing.T) {
+	long := strings.Repeat("é", 60) // each é is 2 bytes
+	item := DownloadJobItem{
+		EpisodeTitle: "Ep",
+		DownloadJob: domain.DownloadJob{
+			Status:       domain.DownloadStatusFailed,
+			ErrorMessage: long,
+		},
+	}
+	got := truncateRunes(long, 40)
+	if !utf8.ValidString(got) {
+		t.Errorf("truncated message is not valid UTF-8: %q", got)
+	}
+	if !strings.HasSuffix(got, "…") {
+		t.Errorf("expected ellipsis suffix, got %q", got)
+	}
+	// The description must also remain valid UTF-8.
+	if !utf8.ValidString(item.Description()) {
+		t.Error("description is not valid UTF-8")
 	}
 }

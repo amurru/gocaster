@@ -185,6 +185,38 @@ func (s *DownloadService) ListJobs() ([]domain.DownloadJob, error) {
 	return s.repo.FindAllDownloadJobs()
 }
 
+// DownloadJobView pairs a DownloadJob with its resolved episode/podcast titles
+// so the UI can render a meaningful row without a separate lookup per job
+// (issue #10 — download queue rows showed blank titles because
+// DownloadJobItem.EpisodeTitle was never populated).
+type DownloadJobView struct {
+	domain.DownloadJob
+	EpisodeTitle string
+	PodcastTitle string
+}
+
+// ListJobsWithEpisodes returns all download jobs enriched with the episode and
+// podcast titles resolved via the repository. Jobs whose episode is missing
+// (e.g. cascade-deleted) get an empty title rather than failing the whole call.
+func (s *DownloadService) ListJobsWithEpisodes() ([]DownloadJobView, error) {
+	jobs, err := s.repo.FindAllDownloadJobs()
+	if err != nil {
+		return nil, err
+	}
+	views := make([]DownloadJobView, 0, len(jobs))
+	for _, job := range jobs {
+		view := DownloadJobView{DownloadJob: job}
+		if ep, err := s.repo.FindEpisodeByID(job.EpisodeID); err == nil && ep != nil {
+			view.EpisodeTitle = ep.Title
+			if p, err := s.repo.FindByID(ep.PodcastID); err == nil && p != nil {
+				view.PodcastTitle = p.Title
+			}
+		}
+		views = append(views, view)
+	}
+	return views, nil
+}
+
 func (s *DownloadService) findJobByID(jobID int64) (*domain.DownloadJob, error) {
 	jobs, err := s.repo.FindAllDownloadJobs()
 	if err != nil {

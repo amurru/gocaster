@@ -74,7 +74,7 @@ type podcastRefreshedMsg struct {
 }
 
 type downloadJobsLoadedMsg struct {
-	jobs []domain.DownloadJob
+	jobs []application.DownloadJobView
 	err  error
 }
 
@@ -180,7 +180,7 @@ type Model struct {
 	sortOrder       episodeSortOrder
 	previousState   viewState
 
-	downloadJobs []domain.DownloadJob
+	downloadJobs []application.DownloadJobView
 	queueList    list.Model
 
 	playbackStatus     domain.PlaybackStatus
@@ -446,7 +446,7 @@ func (m Model) persistSettings(next Settings, previous Settings) tea.Cmd {
 
 func (m Model) loadDownloadJobs() tea.Cmd {
 	return func() tea.Msg {
-		jobs, err := m.downloadService.ListJobs()
+		jobs, err := m.downloadService.ListJobsWithEpisodes()
 		return downloadJobsLoadedMsg{jobs: jobs, err: err}
 	}
 }
@@ -576,7 +576,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items := make([]list.Item, len(m.downloadJobs))
 			for i, job := range m.downloadJobs {
 				items[i] = DownloadJobItem{
-					DownloadJob: job,
+					DownloadJob:  job.DownloadJob,
+					EpisodeTitle: episodeTitleForView(job),
+					PodcastTitle: job.PodcastTitle,
 				}.WithTheme(m.theme).
 					WithFlashTick(flashTick)
 			}
@@ -925,7 +927,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			items := make([]list.Item, len(msg.jobs))
 			for i, job := range msg.jobs {
 				items[i] = DownloadJobItem{
-					DownloadJob: job,
+					DownloadJob:  job.DownloadJob,
+					EpisodeTitle: episodeTitleForView(job),
+					PodcastTitle: job.PodcastTitle,
 				}.WithTheme(m.theme).
 					WithFlashTick(flashTick)
 			}
@@ -2353,6 +2357,17 @@ func (m Model) episodeByID(episodeID int64) *domain.Episode {
 	return nil
 }
 
+// episodeTitleForView resolves a display title for a download job. It prefers
+// the episode title resolved by the download service; if that is empty (e.g.
+// the episode was cascade-deleted) it falls back to a short, human-readable
+// placeholder so the queue row is never blank (issue #10).
+func episodeTitleForView(job application.DownloadJobView) string {
+	if job.EpisodeTitle != "" {
+		return job.EpisodeTitle
+	}
+	return fmt.Sprintf("Episode #%d", job.EpisodeID)
+}
+
 func (m Model) playingEpisodeFromStatus(status domain.PlaybackStatus) *domain.Episode {
 	if status.Source == "" {
 		return nil
@@ -2492,18 +2507,4 @@ func findThemeIndex(themeName string, themeList []string) int {
 func (m Model) renderThemeSelector() string {
 	current := m.themeList[m.selectedThemeIndex]
 	return current
-}
-
-// truncateRunes shortens s to at most maxRunes runes, appending an ellipsis
-// when truncation occurs. It operates on runes rather than bytes so multi-byte
-// UTF-8 sequences are not split (which would produce invalid UTF-8).
-func truncateRunes(s string, maxRunes int) string {
-	if maxRunes <= 0 {
-		return ""
-	}
-	r := []rune(s)
-	if len(r) <= maxRunes {
-		return s
-	}
-	return string(r[:maxRunes]) + "…"
 }

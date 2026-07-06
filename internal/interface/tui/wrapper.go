@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strings"
 
 	"charm.land/lipgloss/v2"
 	"github.com/amurru/gocaster/internal/domain"
@@ -142,6 +143,7 @@ func (e EpisodeItem) WithFlashTick(tick int64) EpisodeItem {
 type DownloadJobItem struct {
 	domain.DownloadJob
 	EpisodeTitle string
+	PodcastTitle string
 	Theme        styles.Theme
 	FlashTick    int64
 }
@@ -156,13 +158,59 @@ func (d DownloadJobItem) Title() string {
 
 func (d DownloadJobItem) Description() string {
 	progress := d.Progress()
-	errorMsg := ""
-	if d.ErrorMessage != "" && len(d.ErrorMessage) > 40 {
-		errorMsg = d.ErrorMessage[:40] + "…"
-	} else {
-		errorMsg = d.ErrorMessage
+	size := formatBytes(d.BytesTotal)
+	// Truncate by rune, not byte, so a multi-byte UTF-8 character at the
+	// boundary isn't split into invalid UTF-8.
+	errorMsg := truncateRunes(d.ErrorMessage, 40)
+
+	// Lead with the podcast title (when known) so the row gives context even
+	// before the status/progress; fall back gracefully when metadata is absent.
+	parts := make([]string, 0, 4)
+	if d.PodcastTitle != "" {
+		parts = append(parts, d.PodcastTitle)
 	}
-	return fmt.Sprintf("%s  •  %s  •  %s", progress, d.StatusBadge(), errorMsg)
+	parts = append(parts, progress)
+	if size != "" {
+		parts = append(parts, size)
+	}
+	parts = append(parts, d.StatusBadge())
+	if errorMsg != "" {
+		parts = append(parts, errorMsg)
+	}
+	return strings.Join(parts, "  •  ")
+}
+
+// formatBytes renders a byte count as a compact human-readable size (e.g.
+// "12.3 MB"), or "" for zero/unknown.
+func formatBytes(n int64) string {
+	if n <= 0 {
+		return ""
+	}
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for x := n / unit; x >= unit; x /= unit {
+		div *= unit
+		exp++
+	}
+	suffix := "KMGTPE"
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), suffix[exp])
+}
+
+// truncateRunes shortens s to at most maxRunes runes, appending an ellipsis
+// when truncation occurs. It operates on runes rather than bytes so multi-byte
+// UTF-8 sequences are not split (which would produce invalid UTF-8).
+func truncateRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "…"
 }
 
 func (d DownloadJobItem) Progress() string {
