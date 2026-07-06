@@ -845,16 +845,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.reason == "startup" {
 			prefix = "Startup sync complete"
 		}
+		// Summarize per-feed failures so the user can see which feeds failed
+		// and why (issue #7), not just a count. Keep it short for the status bar.
+		failureSummary := ""
+		if len(msg.result.Failures) > 0 {
+			parts := make([]string, 0, len(msg.result.Failures))
+			for _, f := range msg.result.Failures {
+				title := f.Title
+				if title == "" {
+					title = f.FeedURL
+				}
+				// Keep the full error; the overall 160-char cap below shortens
+				// the summary. Truncating at the first colon would mangle common
+				// network errors (e.g. `Get "https://…": dial tcp: …` -> `Get "https`).
+				reason := f.Err.Error()
+				parts = append(parts, fmt.Sprintf("%s: %s", title, reason))
+			}
+			failureSummary = " — " + strings.Join(parts, "; ")
+			// Cap the status bar length so many failures don't overflow. Truncate
+			// on a rune boundary so a multi-byte UTF-8 character isn't split into
+			// invalid UTF-8 (titles/errors may contain non-ASCII).
+			failureSummary = truncateRunes(failureSummary, 160)
+		}
+		severity := "success"
+		if msg.result.Failed > 0 {
+			severity = "error"
+		}
 		m.setStatus(
 			fmt.Sprintf(
-				"%s: %d new episodes across %d/%d podcasts (%d failed)",
+				"%s: %d new episodes across %d/%d podcasts (%d failed)%s",
 				prefix,
 				msg.result.NewEpisodes,
 				msg.result.Refreshed,
 				msg.result.TotalPodcasts,
 				msg.result.Failed,
+				failureSummary,
 			),
-			"success",
+			severity,
 		)
 		return m, tea.Batch(cmds...)
 
@@ -2465,4 +2492,18 @@ func findThemeIndex(themeName string, themeList []string) int {
 func (m Model) renderThemeSelector() string {
 	current := m.themeList[m.selectedThemeIndex]
 	return current
+}
+
+// truncateRunes shortens s to at most maxRunes runes, appending an ellipsis
+// when truncation occurs. It operates on runes rather than bytes so multi-byte
+// UTF-8 sequences are not split (which would produce invalid UTF-8).
+func truncateRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "…"
 }
