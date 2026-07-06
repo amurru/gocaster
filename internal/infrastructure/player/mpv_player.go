@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/amurru/gocaster/internal/domain"
@@ -19,13 +20,31 @@ func playerDebugf(format string, args ...any) {
 }
 
 type MPVPlayer struct {
-	mu     sync.Mutex
-	mpv    *mpv.Mpv
-	source string
+	mu          sync.Mutex
+	mpv         *mpv.Mpv
+	source      string
+	audioOutput string
 }
 
-func NewMPVPlayer() domain.Player {
-	p := &MPVPlayer{}
+// MPVOption configures an MPVPlayer at construction.
+type MPVOption func(*MPVPlayer)
+
+// WithAudioOutput sets the mpv audio output backend ("ao" option). "auto" (the
+// default) leaves ao unset so mpv autodetects the best backend for the system;
+// any other value (e.g. "pulse", "pipewire", "alsa", "jack", "coreaudio",
+// "null") is passed through verbatim. This replaces the previous hardcoded
+// ao=pulse that broke playback on non-PulseAudio systems (issue #4).
+func WithAudioOutput(ao string) MPVOption {
+	return func(p *MPVPlayer) {
+		p.audioOutput = strings.TrimSpace(ao)
+	}
+}
+
+func NewMPVPlayer(opts ...MPVOption) domain.Player {
+	p := &MPVPlayer{audioOutput: "auto"}
+	for _, opt := range opts {
+		opt(p)
+	}
 	p.initMPV()
 	return p
 }
@@ -39,11 +58,26 @@ func (p *MPVPlayer) initMPV() {
 
 	playerDebugf("mpv client created, API version: %d", p.mpv.APIVersion())
 
-	// Audio-only config
-	_ = p.mpv.SetOptionString("vo", "null")
-	_ = p.mpv.SetOptionString("ao", "pulse")
-	_ = p.mpv.SetOptionString("idle", "yes")
-	_ = p.mpv.SetOptionString("keep-open", "yes")
+	// Audio-only config. Surface set-option errors instead of discarding them
+	// so a misconfigured backend is diagnosable rather than silently broken.
+	if err := p.mpv.SetOptionString("vo", "null"); err != nil {
+		playerDebugf("vo=null failed: %v", err)
+	}
+	// Only pin ao when the user explicitly configures a backend; "auto" lets
+	// mpv autodetect (the safe default across PulseAudio/PipeWire/ALSA/JACK/
+	// macOS/Windows). Hardcoding ao=pulse broke playback on non-PulseAudio
+	// systems (issue #4).
+	if p.audioOutput != "" && p.audioOutput != "auto" {
+		if err := p.mpv.SetOptionString("ao", p.audioOutput); err != nil {
+			playerDebugf("ao=%s failed: %v", p.audioOutput, err)
+		}
+	}
+	if err := p.mpv.SetOptionString("idle", "yes"); err != nil {
+		playerDebugf("idle=yes failed: %v", err)
+	}
+	if err := p.mpv.SetOptionString("keep-open", "yes"); err != nil {
+		playerDebugf("keep-open=yes failed: %v", err)
+	}
 
 	if err := p.mpv.Initialize(); err != nil {
 		playerDebugf("Initialize failed: %v", err)
@@ -194,16 +228,16 @@ func (p *MPVPlayer) Status() (domain.PlaybackStatus, error) {
 		status.State = domain.PlaybackStateStopped
 	}
 
+	// Use the two-value type assertion form: libmpv IPC can return int64,
+	// string, or nil for a property depending on mpv version and playback
+	// state, and the single-value assertion panics on any non-float64 dynamic
+	// type (issue #3). toFloat64 coerces safely, falling back to 0.
 	if pos, err := p.mpv.GetProperty("time-pos", mpv.FormatDouble); err == nil {
-		if pos != nil {
-			status.PositionSec = pos.(float64)
-		}
+		status.PositionSec = toFloat64(pos)
 	}
 
 	if dur, err := p.mpv.GetProperty("duration", mpv.FormatDouble); err == nil {
-		if dur != nil {
-			status.DurationSec = dur.(float64)
-		}
+		status.DurationSec = toFloat64(dur)
 	}
 
 	if status.DurationSec > 0 {
@@ -211,6 +245,26 @@ func (p *MPVPlayer) Status() (domain.PlaybackStatus, error) {
 	}
 
 	return status, nil
+}
+
+// toFloat64 coerces a libmpv property value to float64 without panicking.
+// mpv most commonly returns float64 for numeric properties, but some
+// versions/states return int64 (or, rarely, a numeric string). Any value that
+// is not coercible yields 0. This replaces unchecked single-value assertions
+// that panicked the whole app on a non-float64 dynamic type (issue #3).
+func toFloat64(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case float32:
+		return float64(n)
+	case int64:
+		return float64(n)
+	case int:
+		return float64(n)
+	default:
+		return 0
+	}
 }
 
 func (p *MPVPlayer) Close() error {
