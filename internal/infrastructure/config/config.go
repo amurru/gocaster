@@ -18,10 +18,12 @@ type Config struct {
 	DiscordPresence   bool   `toml:"discord_presence_enabled"`
 	DiscordClientID   string `toml:"discord_client_id"`
 	ThemeName         string `toml:"theme_name"`
+	AudioOutput       string `toml:"audio_output"`
 }
 
 const defaultPeriodicSyncMins = 60
 const defaultThemeName = "dark-red"
+const defaultAudioOutput = "auto"
 
 const (
 	// DefaultDiscordClientID is the official Gocaster Discord application ID.
@@ -49,6 +51,7 @@ func LoadOrCreate() (Config, error) {
 		DiscordPresence:   false,
 		DiscordClientID:   DefaultDiscordClientID,
 		ThemeName:         defaultThemeName,
+		AudioOutput:       defaultAudioOutput,
 	}
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
@@ -102,7 +105,19 @@ func LoadOrCreate() (Config, error) {
 		cfg.ThemeName = defaultThemeName
 	}
 
+	cfg.AudioOutput = normalizeAudioOutput(cfg.AudioOutput)
+
 	return cfg, nil
+}
+
+// normalizeAudioOutput trims surrounding whitespace and falls back to the
+// "auto" default (mpv autodetect) for empty values. Extracted so the defaulting
+// logic is unit-testable independently of LoadOrCreate.
+func normalizeAudioOutput(s string) string {
+	if s = strings.TrimSpace(s); s == "" {
+		return defaultAudioOutput
+	}
+	return s
 }
 
 type dirs struct {

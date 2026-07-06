@@ -19,6 +19,12 @@ type PodcastRepository interface {
 	FindDownloadJobByEpisodeID(episodeID int64) (*DownloadJob, error)
 	FindAllDownloadJobs() ([]DownloadJob, error)
 	UpdateDownloadJobStatus(id int64, status DownloadStatus, bytesDownloaded int64, bytesTotal int64, errorMsg string) error
+	// UpdateDownloadJobProgress persists the resume-relevant fields of a job
+	// (bytes counters, temp/final paths, ETag, Last-Modified, SupportsResume)
+	// without changing its status. runDownload calls this once it has learned
+	// from the response headers whether the server supports range requests, so
+	// a later retry can resume from the partial .part file.
+	UpdateDownloadJobProgress(job *DownloadJob) error
 	CountNonFailedJobs() (int, error)
 	DeleteDownloadJob(id int64) error
 

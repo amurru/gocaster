@@ -1,10 +1,14 @@
 package persistence
 
 import (
+	"database/sql"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/amurru/gocaster/internal/domain"
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func TestNewSQLiteRepo_RunsMigrations(t *testing.T) {
@@ -213,5 +217,124 @@ func TestSQLiteRepo_DeleteEpisode(t *testing.T) {
 	_, err = repo.FindEpisodeByID(episode.ID)
 	if err == nil {
 		t.Error("expected error after deletion")
+	}
+}
+
+// TestSQLiteRepo_ForeignKeysCascadeOnDelete covers issue #5: with
+// PRAGMA foreign_keys = ON, deleting a podcast must cascade to its episodes
+// and download jobs (the schema declares ON DELETE CASCADE but it was a no-op
+// before the pragma was set per-connection).
+func TestSQLiteRepo_ForeignKeysCascadeOnDelete(t *testing.T) {
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteRepo failed: %v", err)
+	}
+	defer repo.Close()
+
+	podcast := &domain.Podcast{Title: "Cascade Test", FeedURL: "https://example.com/cascade.xml"}
+	if err := repo.Save(podcast); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	episode := &domain.Episode{
+		PodcastID: podcast.ID,
+		Title:     "Ep",
+		AudioURL:  "https://example.com/cascade.mp3",
+	}
+	if err := repo.SaveEpisode(episode); err != nil {
+		t.Fatalf("SaveEpisode failed: %v", err)
+	}
+	job := &domain.DownloadJob{
+		EpisodeID: episode.ID,
+		Status:    domain.DownloadStatusQueued,
+	}
+	if err := repo.SaveDownloadJob(job); err != nil {
+		t.Fatalf("SaveDownloadJob failed: %v", err)
+	}
+
+	// Delete the parent podcast; cascade should remove the episode and job.
+	if err := repo.Delete(podcast.ID); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+
+	if eps, err := repo.FindEpisodesByPodcastID(podcast.ID); err != nil || len(eps) != 0 {
+		t.Errorf("episodes not cascaded: err=%v eps=%d", err, len(eps))
+	}
+	if _, err := repo.FindDownloadJobByEpisodeID(episode.ID); err == nil {
+		t.Error("download job not cascaded: expected error (no rows)")
+	}
+}
+
+// TestSQLiteRepo_ForeignKeyEnforcedRejectsOrphan covers issue #5: with
+// foreign_keys = ON, inserting a child row referencing a nonexistent parent
+// must fail (previously it silently succeeded).
+func TestSQLiteRepo_ForeignKeyEnforcedRejectsOrphan(t *testing.T) {
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteRepo failed: %v", err)
+	}
+	defer repo.Close()
+
+	orphan := &domain.Episode{
+		PodcastID: 99999, // no such podcast
+		Title:     "Orphan",
+		AudioURL:  "https://example.com/orphan.mp3",
+	}
+	if err := repo.SaveEpisode(orphan); err == nil {
+		t.Error("expected foreign-key violation when inserting an orphan episode, got nil")
+	}
+}
+
+// TestSQLiteRepo_WALJournalMode covers issue #5: a file-backed DB must report
+// WAL journal mode. (In-memory DBs keep "memory" mode, so this uses a temp file.)
+func TestSQLiteRepo_WALJournalMode(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "wal_test.db")
+	repo, err := NewSQLiteRepo(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteRepo failed: %v", err)
+	}
+	defer repo.Close()
+
+	var mode string
+	// Use the repo's underlying connection by querying through the public API
+	// is not possible; reach into the *sql.DB via a small helper query instead.
+	// journal_mode is set on the file, so a fresh raw connection sees it too.
+	raw, err := sql.Open("sqlite3", dbPath)
+	if err != nil {
+		t.Fatalf("reopen db failed: %v", err)
+	}
+	defer raw.Close()
+	if err := raw.QueryRow("PRAGMA journal_mode").Scan(&mode); err != nil {
+		t.Fatalf("query journal_mode failed: %v", err)
+	}
+	if !strings.EqualFold(mode, "wal") {
+		t.Errorf("journal_mode = %q, want %q", mode, "wal")
+	}
+}
+
+// TestSQLiteRepo_ForeignKeyPragmaOn verifies the repo's own pooled connection
+// has foreign_keys = ON (set via the ConnectHook). Querying the repo's *sql.DB
+// (same package, so the unexported field is reachable) exercises the real
+// connection the application uses.
+func TestSQLiteRepo_ForeignKeyPragmaOn(t *testing.T) {
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteRepo failed: %v", err)
+	}
+	defer repo.Close()
+
+	var fk int
+	if err := repo.db.QueryRow("PRAGMA foreign_keys").Scan(&fk); err != nil {
+		t.Fatalf("query foreign_keys failed: %v", err)
+	}
+	if fk != 1 {
+		t.Errorf("foreign_keys = %d, want 1 (ConnectHook pragma not applied)", fk)
+	}
+
+	var bt int
+	if err := repo.db.QueryRow("PRAGMA busy_timeout").Scan(&bt); err != nil {
+		t.Fatalf("query busy_timeout failed: %v", err)
+	}
+	if bt != 5000 {
+		t.Errorf("busy_timeout = %d, want 5000", bt)
 	}
 }

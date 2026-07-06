@@ -1,7 +1,21 @@
 package application
 
 import (
+	"bytes"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/amurru/gocaster/internal/domain"
+	"github.com/amurru/gocaster/internal/infrastructure/persistence"
 )
 
 func TestExtractExtension(t *testing.T) {
@@ -145,5 +159,402 @@ func TestSafeFilename(t *testing.T) {
 				t.Errorf("safeFilename(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// newDownloadTestRepo returns a repo backed by a temp-file SQLite DB, seeded
+// with one podcast and one episode pointing at the given audio URL. A temp file
+// is used (not ":memory:") so that database/sql connection pooling sees a single
+// shared database across pooled connections — ":memory:" gives each connection
+// its own private DB, which makes downloads-table lookups flaky under the
+// download goroutine's concurrency.
+func newDownloadTestRepo(t *testing.T, audioURL string) *persistence.SQLiteRepo {
+	t.Helper()
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	repo, err := persistence.NewSQLiteRepo(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteRepo failed: %v", err)
+	}
+	t.Cleanup(func() { repo.Close() })
+
+	podcast := &domain.Podcast{Title: "Test", FeedURL: "https://example.com/feed.xml"}
+	if err := repo.Save(podcast); err != nil {
+		t.Fatalf("Save podcast failed: %v", err)
+	}
+	episode := &domain.Episode{
+		PodcastID:   podcast.ID,
+		Title:       "Test Episode",
+		AudioURL:    audioURL,
+		PublishedAt: time.Now(),
+	}
+	if err := repo.SaveEpisode(episode); err != nil {
+		t.Fatalf("SaveEpisode failed: %v", err)
+	}
+	return repo
+}
+
+// waitForJobCondition polls the repo until the job for episodeID satisfies want,
+// or the timeout elapses. runDownload runs in its own goroutine, so callers must
+// wait for completion before asserting on DB state.
+func waitForJobCondition(t *testing.T, repo *persistence.SQLiteRepo, episodeID int64, want domain.DownloadStatus, timeout time.Duration) *domain.DownloadJob {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var lastJob *domain.DownloadJob
+	var lastErr error
+	for time.Now().Before(deadline) {
+		job, err := repo.FindDownloadJobByEpisodeID(episodeID)
+		lastJob, lastErr = job, err
+		if err == nil && job != nil && job.Status == want {
+			return job
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for job status %q (last job: %+v, last err: %v)", want, lastJob, lastErr)
+	return nil
+}
+
+// TestDownloadService_FailurePreservesResumeData covers issue #1: a transient
+// mid-stream failure must NOT wipe BytesDownloaded/BytesTotal, so a retry can
+// resume from the partial .part file.
+func TestDownloadService_FailurePreservesResumeData(t *testing.T) {
+	// Server fails every request with a server error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "transient", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	repo := newDownloadTestRepo(t, srv.URL+"/ep.mp3")
+	svc := NewDownloadService(repo, dir)
+
+	episode, err := repo.FindEpisodeByID(1)
+	if err != nil {
+		t.Fatalf("FindEpisodeByID failed: %v", err)
+	}
+
+	if err := svc.QueueEpisodeDownload(episode.ID); err != nil {
+		t.Fatalf("QueueEpisodeDownload failed: %v", err)
+	}
+
+	job := waitForJobCondition(t, repo, episode.ID, domain.DownloadStatusFailed, 3*time.Second)
+
+	// Issue #1: byte counters must reflect partial progress, NOT be reset to 0.
+	// (Here the server errored before sending a body, so both are 0 — but the
+	// key invariant is that failJob never zeroes them. Verify via the code path
+	// with a server that sends partial data below.)
+	if job.Status != domain.DownloadStatusFailed {
+		t.Fatalf("expected status failed, got %s", job.Status)
+	}
+	if job.ErrorMessage == "" {
+		t.Error("expected a non-empty error message on failure")
+	}
+}
+
+// TestDownloadService_RetriesResumeFromPartialFile covers issue #1's acceptance
+// criterion end-to-end: after a failed download, a retry resumes from the
+// partial .part file rather than restarting from scratch.
+//
+// The server honors Range requests:
+//   - first request (no Range): respond 206 Partial Content for the first half,
+//     then abort the connection so the client sees a short read and the job fails
+//     with SupportsResume persisted.
+//   - second request (Range: bytes=N-): serve the remaining bytes with 206.
+//
+// After retry the final file must equal the full payload and be marked downloaded.
+func TestDownloadService_RetriesResumeFromPartialFile(t *testing.T) {
+	fullPayload := []byte(strings.Repeat("Z", 8192))
+	cutoff := len(fullPayload) / 2 // 4096 bytes served before the first abort
+
+	var requests int32
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+
+		rangeHdr := r.Header.Get("Range")
+		if rangeHdr == "" {
+			// First download attempt: advertise the FULL size but stream only
+			// the first half, then drop the connection. The client sees a short
+			// read (io.ErrUnexpectedEOF) and the job fails with the partial
+			// bytes preserved. Accept-Ranges advertises that resume is allowed.
+			w.Header().Set("Content-Length", strconv.Itoa(len(fullPayload)))
+			w.Header().Set("Accept-Ranges", "bytes")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(fullPayload[:cutoff])
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			// Hijack and close to force the unexpected EOF on the client side.
+			hj, ok := w.(http.Hijacker)
+			if !ok {
+				t.Fatal("server does not support hijacking")
+			}
+			conn, _, _ := hj.Hijack()
+			if conn != nil {
+				_ = conn.Close()
+			}
+			return
+		}
+
+		// Resume request: parse "bytes=N-" and serve the suffix with 206.
+		var start int
+		fmt.Sscanf(rangeHdr, "bytes=%d-", &start)
+		if start < 0 || start > len(fullPayload) {
+			http.Error(w, "bad range", http.StatusRequestedRangeNotSatisfiable)
+			return
+		}
+		rem := fullPayload[start:]
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, len(fullPayload)-1, len(fullPayload)))
+		w.Header().Set("Content-Length", strconv.Itoa(len(rem)))
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write(rem)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	repo := newDownloadTestRepo(t, srv.URL+"/ep.mp3")
+	svc := NewDownloadService(repo, dir)
+
+	episode, err := repo.FindEpisodeByID(1)
+	if err != nil {
+		t.Fatalf("FindEpisodeByID failed: %v", err)
+	}
+
+	// First attempt: queues and starts the download, which aborts mid-stream.
+	if err := svc.QueueEpisodeDownload(episode.ID); err != nil {
+		t.Fatalf("QueueEpisodeDownload failed: %v", err)
+	}
+	job := waitForJobCondition(t, repo, episode.ID, domain.DownloadStatusFailed, 3*time.Second)
+
+	// Issue #1 invariant: byte counters and SupportsResume must be preserved so
+	// the retry can resume. These assertions must be strict (not vacuously true).
+	if job.BytesTotal != int64(len(fullPayload)) {
+		t.Fatalf("BytesTotal = %d, want %d (must be preserved, not wiped)", job.BytesTotal, len(fullPayload))
+	}
+	if job.BytesDownloaded == 0 {
+		t.Fatal("BytesDownloaded = 0; expected partial bytes to be recorded before failure (test would pass vacuously)")
+	}
+	if !job.SupportsResume {
+		t.Fatal("SupportsResume = false after a 206 response; the resume branch is unreachable on retry (issue #1 not fully fixed)")
+	}
+
+	// The .part file must contain exactly the bytes recorded in BytesDownloaded.
+	partSize := fileWithSuffixSize(t, dir, ".part")
+	if partSize != job.BytesDownloaded {
+		t.Fatalf(".part size (%d) != BytesDownloaded (%d)", partSize, job.BytesDownloaded)
+	}
+
+	// Retry: should resume from the partial file and complete.
+	if err := svc.RetryJob(job.ID); err != nil {
+		t.Fatalf("RetryJob failed: %v", err)
+	}
+
+	// Wait for completion (the job is deleted on success).
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		ep, _ := repo.FindEpisodeByID(episode.ID)
+		if ep != nil && ep.IsDownloaded {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	ep, _ := repo.FindEpisodeByID(episode.ID)
+	if ep == nil || !ep.IsDownloaded {
+		t.Fatal("download did not complete after retry")
+	}
+
+	// The final downloaded file must equal the full payload (resume correctness).
+	got, err := os.ReadFile(ep.LocalPath)
+	if err != nil {
+		t.Fatalf("reading final file failed: %v", err)
+	}
+	if !bytes.Equal(got, fullPayload) {
+		t.Fatalf("final file length = %d, want %d (resume produced corrupt/incomplete file)", len(got), len(fullPayload))
+	}
+
+	// No .part file should remain after a successful rename.
+	if partSize := fileWithSuffixSize(t, dir, ".part"); partSize != -1 {
+		t.Errorf("expected .part file to be removed after completion, found %d bytes", partSize)
+	}
+}
+
+// fileWithSuffixSize returns the size of the first file in dir whose name ends
+// with suffix, or -1 if none exists.
+func fileWithSuffixSize(t *testing.T, dir, suffix string) int64 {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir(%s) failed: %v", dir, err)
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), suffix) {
+			info, _ := e.Info()
+			return info.Size()
+		}
+	}
+	return -1
+}
+
+// TestDownloadService_ProgressThrottle publishes updates at a steady ~1 MiB
+// cadence and always reaches 100% on completion (issue #2).
+func TestDownloadService_ProgressThrottle(t *testing.T) {
+	// Slightly more than 1 MiB so at least one throttled update fires.
+	payloadSize := progressInterval + 32*1024
+	payload := strings.Repeat("b", payloadSize)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(payloadSize))
+		_, _ = io.Copy(w, strings.NewReader(payload))
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	repo := newDownloadTestRepo(t, srv.URL+"/ep.m4a")
+	svc := NewDownloadService(repo, dir)
+
+	episode, err := repo.FindEpisodeByID(1)
+	if err != nil {
+		t.Fatalf("FindEpisodeByID failed: %v", err)
+	}
+	if err := svc.QueueEpisodeDownload(episode.ID); err != nil {
+		t.Fatalf("QueueEpisodeDownload failed: %v", err)
+	}
+
+	// Wait for completion (job is deleted on success) by polling the episode.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		ep, _ := repo.FindEpisodeByID(episode.ID)
+		if ep != nil && ep.IsDownloaded {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	ep, _ := repo.FindEpisodeByID(episode.ID)
+	if ep == nil || !ep.IsDownloaded {
+		t.Fatalf("download did not complete; episode downloaded=%v", ep != nil && ep.IsDownloaded)
+	}
+
+	// Verify the final file matches the expected size.
+	if err := filepath.WalkDir(dir, func(_ string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".part") {
+			info, _ := d.Info()
+			if info.Size() != int64(payloadSize) {
+				t.Errorf("downloaded file size = %d, want %d", info.Size(), payloadSize)
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("WalkDir failed: %v", err)
+	}
+}
+
+// TestDownloadService_MalformedURLErrors covers issue #6: a malformed download
+// URL must surface an error rather than nil-dereferencing an unhandled
+// http.NewRequest result.
+func TestDownloadService_MalformedURLErrors(t *testing.T) {
+	dir := t.TempDir()
+	repo := newDownloadTestRepo(t, "http://[::1]:named") // invalid URL
+
+	svc := NewDownloadService(repo, dir)
+	episode, err := repo.FindEpisodeByID(1)
+	if err != nil {
+		t.Fatalf("FindEpisodeByID failed: %v", err)
+	}
+
+	if err := svc.QueueEpisodeDownload(episode.ID); err != nil {
+		t.Fatalf("QueueEpisodeDownload failed: %v", err)
+	}
+
+	// The job should fail (not panic) and record an error message.
+	job := waitForJobCondition(t, repo, episode.ID, domain.DownloadStatusFailed, 3*time.Second)
+	if job.ErrorMessage == "" {
+		t.Error("expected non-empty error message for malformed URL")
+	}
+}
+
+// TestDownloadService_HTTPClientTimeout ensures the download client has a
+// transport with response-header timeout configured so a stalled server cannot
+// hang the goroutine indefinitely (issue #6).
+func TestDownloadService_HTTPClientTimeout(t *testing.T) {
+	svc := NewDownloadService(nil, "")
+	if svc.http == nil {
+		t.Fatal("expected non-nil http client")
+	}
+	if svc.http.Transport == nil {
+		t.Fatal("expected configured transport with timeouts")
+	}
+	// A stalled server that never sends headers must fail within a bounded time.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done() // never respond
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	repo := newDownloadTestRepo(t, srv.URL+"/ep.mp3")
+	stallSvc := NewDownloadService(repo, dir)
+	// Give this service its own isolated transport with a short header timeout
+	// so the test completes quickly without mutating the shared package-level
+	// downloadTransport (which would leak the 200ms timeout into other tests).
+	stallSvc.http = &http.Client{
+		Transport: &http.Transport{ResponseHeaderTimeout: 200 * time.Millisecond},
+	}
+
+	episode, err := repo.FindEpisodeByID(1)
+	if err != nil {
+		t.Fatalf("FindEpisodeByID failed: %v", err)
+	}
+	if err := stallSvc.QueueEpisodeDownload(episode.ID); err != nil {
+		t.Fatalf("QueueEpisodeDownload failed: %v", err)
+	}
+
+	job := waitForJobCondition(t, repo, episode.ID, domain.DownloadStatusFailed, 5*time.Second)
+	if job.ErrorMessage == "" {
+		t.Error("expected non-empty error message when server stalls")
+	}
+}
+
+// TestFailJob_PreservesByteCounters directly verifies the issue #1 invariant:
+// failJob must persist the job's current BytesDownloaded/BytesTotal, not zero.
+func TestFailJob_PreservesByteCounters(t *testing.T) {
+	repo := newDownloadTestRepo(t, "https://example.com/ep.mp3")
+	dir := t.TempDir()
+	svc := NewDownloadService(repo, dir)
+
+	episode, err := repo.FindEpisodeByID(1)
+	if err != nil {
+		t.Fatalf("FindEpisodeByID failed: %v", err)
+	}
+	job := &domain.DownloadJob{
+		EpisodeID:       episode.ID,
+		Status:          domain.DownloadStatusDownloading,
+		BytesDownloaded: 12345,
+		BytesTotal:      100000,
+		SupportsResume:  true,
+	}
+	if err := repo.SaveDownloadJob(job); err != nil {
+		t.Fatalf("SaveDownloadJob failed: %v", err)
+	}
+
+	// Simulate a failure after partial progress.
+	svc.failJob(job, "transient network error")
+
+	stored, err := repo.FindDownloadJobByEpisodeID(episode.ID)
+	if err != nil {
+		t.Fatalf("FindDownloadJobByEpisodeID failed: %v", err)
+	}
+	if stored.Status != domain.DownloadStatusFailed {
+		t.Errorf("expected status failed, got %s", stored.Status)
+	}
+	if stored.BytesDownloaded != 12345 {
+		t.Errorf("BytesDownloaded = %d, want 12345 (must be preserved, not wiped)", stored.BytesDownloaded)
+	}
+	if stored.BytesTotal != 100000 {
+		t.Errorf("BytesTotal = %d, want 100000 (must be preserved, not wiped)", stored.BytesTotal)
+	}
+	if stored.ErrorMessage != "transient network error" {
+		t.Errorf("ErrorMessage = %q, want %q", stored.ErrorMessage, "transient network error")
 	}
 }

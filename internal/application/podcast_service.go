@@ -20,6 +20,17 @@ type RefreshAllResult struct {
 	Refreshed     int
 	Failed        int
 	NewEpisodes   int
+	// Failures records each podcast that could not be refreshed and why, so
+	// callers (the TUI) can show which feeds failed instead of only a count.
+	Failures []RefreshFailure
+}
+
+// RefreshFailure describes a single per-feed failure during RefreshAllPodcasts.
+type RefreshFailure struct {
+	PodcastID int64
+	Title     string
+	FeedURL   string
+	Err       error
 }
 
 func NewPodcastService(repo domain.PodcastRepository, fetcher FeedParser) *PodcastService {
@@ -117,6 +128,12 @@ func (s *PodcastService) RefreshAllPodcasts() (RefreshAllResult, error) {
 		newCount, refreshErr := s.RefreshPodcast(podcast.ID)
 		if refreshErr != nil {
 			result.Failed++
+			result.Failures = append(result.Failures, RefreshFailure{
+				PodcastID: podcast.ID,
+				Title:     podcast.Title,
+				FeedURL:   podcast.FeedURL,
+				Err:       refreshErr,
+			})
 			continue
 		}
 		result.Refreshed++

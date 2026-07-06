@@ -78,6 +78,13 @@ type mprisBroadcaster struct {
 	position float64
 	duration float64
 	running  bool
+
+	// done signals positionUpdater to stop; wg tracks it so Close can wait for
+	// it to fully exit before closing the DBus connection. This closes the
+	// shutdown race where the updater called conn.Emit on an already-closed
+	// *dbus.Conn (issue #9).
+	done chan struct{}
+	wg   sync.WaitGroup
 }
 
 type noOpBroadcaster struct{}
@@ -91,6 +98,7 @@ func NewMPRISBroadcaster() (domain.PlaybackBroadcaster, error) {
 	b := &mprisBroadcaster{
 		conn:    conn,
 		running: true,
+		done:    make(chan struct{}),
 	}
 
 	if err := b.setup(); err != nil {
@@ -98,6 +106,7 @@ func NewMPRISBroadcaster() (domain.PlaybackBroadcaster, error) {
 		return &noOpBroadcaster{}, fmt.Errorf("setup MPRIS service: %w", err)
 	}
 
+	b.wg.Add(1)
 	go b.positionUpdater()
 
 	return b, nil
@@ -169,11 +178,18 @@ func (b *mprisBroadcaster) setup() error {
 }
 
 func (b *mprisBroadcaster) positionUpdater() {
+	defer b.wg.Done()
+
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {
-		<-ticker.C
+		select {
+		case <-b.done:
+			// Close() has asked us to stop; exit before touching the connection.
+			return
+		case <-ticker.C:
+		}
 
 		b.mu.Lock()
 		if !b.running {
@@ -208,6 +224,11 @@ func (b *mprisBroadcaster) PublishState(
 ) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
+	// Guard against a nil/closed connection (e.g. calls racing with Close).
+	if b.conn == nil {
+		return nil
+	}
 
 	b.state = state
 	b.metadata = metadata
@@ -263,6 +284,11 @@ func (b *mprisBroadcaster) PublishPosition(positionSec float64, durationSec floa
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	// Guard against a nil/closed connection (e.g. calls racing with Close).
+	if b.conn == nil {
+		return nil
+	}
+
 	b.position = positionSec
 	b.duration = durationSec
 
@@ -279,12 +305,32 @@ func (b *mprisBroadcaster) PublishPosition(positionSec float64, durationSec floa
 }
 
 func (b *mprisBroadcaster) Close() error {
+	// Signal positionUpdater to stop and wait for it to fully exit before
+	// closing the connection. Without the WaitGroup, Close() could return and
+	// close *dbus.Conn while the updater was mid-Emit (issue #9 shutdown race).
 	b.mu.Lock()
+	if !b.running {
+		// Already closed (or never started): avoid closing done twice.
+		b.mu.Unlock()
+		return nil
+	}
 	b.running = false
 	b.mu.Unlock()
+
+	if b.done != nil {
+		close(b.done)
+	}
+	b.wg.Wait()
+
 	if b.conn != nil {
 		b.conn.ReleaseName(mprisBusName)
-		return b.conn.Close()
+		err := b.conn.Close()
+		// Nil the conn under the lock so concurrent Publish* calls (guarded by
+		// the nil check) no-op instead of Emit-ing on a closed connection.
+		b.mu.Lock()
+		b.conn = nil
+		b.mu.Unlock()
+		return err
 	}
 	return nil
 }

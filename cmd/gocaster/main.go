@@ -17,6 +17,18 @@ import (
 )
 
 func main() {
+	// run() holds all setup and the program loop so that deferred cleanup
+	// (repo.Close, playerSvc.Close) actually unwinds before os.Exit. A bare
+	// os.Exit(1) inside the body would skip the defers, defeating the
+	// resource-cleanup fix (issue #9); returning an error lets main exit
+	// non-zero only after defers have run.
+	if err := run(); err != nil {
+		fmt.Printf("[☠️] there's been an error: %v", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	// Set-up debug logging
 	if len(os.Getenv("DEBUG")) > 0 {
 		f, err := tea.LogToFile("debug.log", "debug")
@@ -39,13 +51,17 @@ func main() {
 	if err != nil {
 		log.Fatal("fatal: ", err)
 	}
+	// Ensure the SQLite handle is released on every exit path (issue #9). It was
+	// previously never closed, leaking the DB handle.
+	defer repo.Close()
+
 	fetcher := rss.NewFeedFetcher()
 	podcastSvc := application.NewPodcastService(repo, fetcher)
 
 	downloadSvc := application.NewDownloadService(repo, cfg.DownloadPath)
 
 	// Setup player and broadcaster
-	mpvPlayer := player.NewMPVPlayer()
+	mpvPlayer := player.NewMPVPlayer(player.WithAudioOutput(cfg.AudioOutput))
 	mprisBroadcaster, err := system.NewMPRISBroadcaster()
 	if err != nil {
 		log.Printf("Warning: failed to create MPRIS broadcaster: %v", err)
@@ -88,11 +104,18 @@ func main() {
 		return config.Save(cfg)
 	}
 	model := tui.NewModel(podcastSvc, downloadSvc, playerSvc, settings, saveSettings, customThemesDir)
+	// Close the player service (which closes the broadcaster and the player) on
+	// every exit path, before repo.Close() runs via its deferred call (issue #9).
+	// playerSvc.Close must run before the DB is closed since shutdown may persist
+	// final playback state, so defer it after the repo defer (defers are LIFO).
+	defer playerSvc.Close()
+
 	p := tea.NewProgram(model)
+	// The previously bare tea.Quit() call after Run() was a no-op: tea.Quit is
+	// only meaningful as a command returned from Update, and Run() has already
+	// returned. Cleanup happens via the deferred Close calls above.
 	if _, err := p.Run(); err != nil {
-		fmt.Printf("[☠️] there's been an error: %v", err)
-		os.Exit(1)
+		return err
 	}
-	_ = playerSvc.Close()
-	tea.Quit()
+	return nil
 }
