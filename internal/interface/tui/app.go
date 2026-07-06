@@ -862,10 +862,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				parts = append(parts, fmt.Sprintf("%s: %s", title, reason))
 			}
 			failureSummary = " — " + strings.Join(parts, "; ")
-			// Cap the status bar length so many failures don't overflow.
-			if len(failureSummary) > 160 {
-				failureSummary = failureSummary[:157] + "…"
-			}
+			// Cap the status bar length so many failures don't overflow. Truncate
+			// on a rune boundary so a multi-byte UTF-8 character isn't split into
+			// invalid UTF-8 (titles/errors may contain non-ASCII).
+			failureSummary = truncateRunes(failureSummary, 160)
 		}
 		severity := "success"
 		if msg.result.Failed > 0 {
@@ -2492,4 +2492,18 @@ func findThemeIndex(themeName string, themeList []string) int {
 func (m Model) renderThemeSelector() string {
 	current := m.themeList[m.selectedThemeIndex]
 	return current
+}
+
+// truncateRunes shortens s to at most maxRunes runes, appending an ellipsis
+// when truncation occurs. It operates on runes rather than bytes so multi-byte
+// UTF-8 sequences are not split (which would produce invalid UTF-8).
+func truncateRunes(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "…"
 }
