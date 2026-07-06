@@ -3,12 +3,14 @@ package main
 import (
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/amurru/gocaster/internal/application"
 	"github.com/amurru/gocaster/internal/domain"
 	"github.com/amurru/gocaster/internal/infrastructure/config"
+	"github.com/amurru/gocaster/internal/infrastructure/logging"
 	"github.com/amurru/gocaster/internal/infrastructure/persistence"
 	"github.com/amurru/gocaster/internal/infrastructure/player"
 	"github.com/amurru/gocaster/internal/infrastructure/rss"
@@ -38,7 +40,17 @@ func run() error {
 		defer f.Close()
 	}
 
-	cfg, err := config.LoadOrCreate()
+	// Build the structured logger (issue #14). It writes to stderr — never
+	// stdout, which the TUI owns — so diagnostics can never corrupt the
+	// rendered interface. DEBUG=true enables debug-level records, preserving
+	// the previous opt-in behavior.
+	level := slog.LevelInfo
+	if len(os.Getenv("DEBUG")) > 0 {
+		level = slog.LevelDebug
+	}
+	logger := logging.NewLogger(level)
+
+	cfg, err := config.LoadOrCreate(logger)
 	if err != nil {
 		log.Fatal("fatal: ", err)
 	}
@@ -56,32 +68,37 @@ func run() error {
 	defer repo.Close()
 
 	fetcher := rss.NewFeedFetcher()
-	podcastSvc := application.NewPodcastService(repo, fetcher)
+	// Services accept only the focused repository ports they use (issue #17);
+	// repo (SQLiteRepo) satisfies the union PodcastRepository, hence each port.
+	podcastSvc := application.NewPodcastService(repo, repo, fetcher, logger)
 
-	downloadSvc := application.NewDownloadService(repo, cfg.DownloadPath)
+	downloadSvc := application.NewDownloadService(repo, repo, repo, cfg.DownloadPath, logger)
 
 	// Setup player and broadcaster
-	mpvPlayer := player.NewMPVPlayer(player.WithAudioOutput(cfg.AudioOutput))
+	mpvPlayer := player.NewMPVPlayer(
+		player.WithAudioOutput(cfg.AudioOutput),
+		player.WithLogger(logger),
+	)
 	mprisBroadcaster, err := system.NewMPRISBroadcaster()
 	if err != nil {
-		log.Printf("Warning: failed to create MPRIS broadcaster: %v", err)
+		logger.Warn("failed to create MPRIS broadcaster", "err", err)
 	}
 	broadcasters := []domain.PlaybackBroadcaster{mprisBroadcaster}
 	if cfg.DiscordPresence {
 		discordBroadcaster, discordErr := system.NewDiscordBroadcaster(cfg.DiscordClientID)
 		if discordErr != nil {
-			log.Printf("Warning: failed to create Discord broadcaster: %v", discordErr)
+			logger.Warn("failed to create Discord broadcaster", "err", discordErr)
 		} else {
 			broadcasters = append(broadcasters, discordBroadcaster)
 		}
 	}
 	broadcaster := system.NewCompositeBroadcaster(broadcasters...)
-	playerSvc := application.NewPlayerService(repo, mpvPlayer, broadcaster)
+	playerSvc := application.NewPlayerService(repo, repo, mpvPlayer, broadcaster, logger)
 
 	// Get custom themes directory
 	customThemesDir, err := config.GetCustomThemesDir()
 	if err != nil {
-		log.Printf("Warning: failed to determine custom themes directory: %v", err)
+		logger.Warn("failed to determine custom themes directory", "err", err)
 		customThemesDir = ""
 	}
 

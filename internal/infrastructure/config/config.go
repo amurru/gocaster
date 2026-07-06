@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/amurru/gocaster/internal/domain"
 )
 
 type Config struct {
@@ -34,7 +35,17 @@ const (
 	DefaultDiscordPublicKey = "b6910d4eead9b118c44fad8079475c5f51aefc362100fdd62b9c14e30f6893fb"
 )
 
-func LoadOrCreate() (Config, error) {
+// LoadOrCreate reads the TOML config from the user's config directory, creating
+// a default on first run. logger records non-fatal issues (missing/malformed
+// config, clamped values) as structured warnings instead of printing to stdout,
+// which a TUI app owns (issue #14). A nil logger suppresses those warnings.
+func LoadOrCreate(logger domain.Logger) (Config, error) {
+	warn := func(msg string, args ...any) {
+		if logger != nil {
+			logger.Warn(msg, args...)
+		}
+	}
+
 	dirs, err := getDirs()
 	if err != nil {
 		return Config{}, fmt.Errorf("failed to determine config dirs: %w", err)
@@ -56,14 +67,14 @@ func LoadOrCreate() (Config, error) {
 
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
 		if err := writeDefaultConfig(configPath, cfg); err != nil {
-			fmt.Printf("Warning: could not create default config: %v\n", err)
+			warn("could not create default config", "err", err)
 		}
 		return cfg, nil
 	}
 
 	meta, err := toml.DecodeFile(configPath, &cfg)
 	if err != nil {
-		fmt.Printf("Warning: config file malformed, using defaults: %v\n", err)
+		warn("config file malformed, using defaults", "err", err)
 		return cfg, nil
 	}
 
@@ -72,7 +83,7 @@ func LoadOrCreate() (Config, error) {
 	} else {
 		cfg.DatabasePath = resolvePath(cfg.DatabasePath)
 		if !isAbsolute(cfg.DatabasePath) {
-			fmt.Printf("Warning: database_path is not absolute, using default\n")
+			warn("database_path is not absolute, using default")
 			cfg.DatabasePath = dirs.defaultDB
 		}
 	}
@@ -82,22 +93,22 @@ func LoadOrCreate() (Config, error) {
 	} else {
 		cfg.DownloadPath = resolvePath(cfg.DownloadPath)
 		if !isAbsolute(cfg.DownloadPath) {
-			fmt.Printf("Warning: download_path is not absolute, using default\n")
+			warn("download_path is not absolute, using default")
 			cfg.DownloadPath = dirs.defaultDownloads
 		}
 	}
 
 	if len(meta.Undecoded()) > 0 {
-		fmt.Printf("Warning: config has unknown fields, ignoring them\n")
+		warn("config has unknown fields, ignoring them")
 	}
 
 	if cfg.PeriodicSyncMins <= 0 {
-		fmt.Printf("Warning: periodic_sync_minutes must be greater than zero, using default\n")
+		warn("periodic_sync_minutes must be greater than zero, using default")
 		cfg.PeriodicSyncMins = defaultPeriodicSyncMins
 	}
 	cfg.DiscordClientID = strings.TrimSpace(cfg.DiscordClientID)
 	if cfg.DiscordPresence && cfg.DiscordClientID == "" {
-		fmt.Printf("Warning: discord_presence_enabled requires discord_client_id, disabling Discord presence\n")
+		warn("discord_presence_enabled requires discord_client_id, disabling Discord presence")
 		cfg.DiscordPresence = false
 	}
 

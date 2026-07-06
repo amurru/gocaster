@@ -33,23 +33,38 @@ var downloadTransport = &http.Transport{
 }
 
 type DownloadService struct {
-	repo        domain.PodcastRepository
+	jobs        domain.DownloadJobRepo
+	episodes    domain.EpisodeRepo
+	podcasts    domain.PodcastRepo
 	http        *http.Client
 	downloadDir string
+	logger      domain.Logger
 }
 
-func NewDownloadService(repo domain.PodcastRepository, downloadDir string) *DownloadService {
+// NewDownloadService accepts only the focused repository ports a download
+// needs: the download-job port (primary), the episode port (for source
+// resolution and MarkEpisodeDownloaded), and the podcast port (only for
+// ListJobsWithEpisodes title enrichment). The concrete SQLiteRepo satisfies all
+// three via the union PodcastRepository (issue #17). logger defaults to
+// NoopLogger when nil (issue #14).
+func NewDownloadService(jobs domain.DownloadJobRepo, episodes domain.EpisodeRepo, podcasts domain.PodcastRepo, downloadDir string, logger domain.Logger) *DownloadService {
+	if logger == nil {
+		logger = domain.NoopLogger{}
+	}
 	return &DownloadService{
-		repo: repo,
+		jobs:     jobs,
+		episodes: episodes,
+		podcasts: podcasts,
 		http: &http.Client{
 			Transport: downloadTransport,
 		},
 		downloadDir: downloadDir,
+		logger:      logger,
 	}
 }
 
 func (s *DownloadService) QueueEpisodeDownload(episodeID int64) error {
-	episode, err := s.repo.FindEpisodeByID(episodeID)
+	episode, err := s.episodes.FindEpisodeByID(episodeID)
 	if err != nil {
 		return fmt.Errorf("could not find episode: %w", err)
 	}
@@ -58,7 +73,7 @@ func (s *DownloadService) QueueEpisodeDownload(episodeID int64) error {
 		return fmt.Errorf("episode already downloaded")
 	}
 
-	existingJob, err := s.repo.FindDownloadJobByEpisodeID(episodeID)
+	existingJob, err := s.jobs.FindDownloadJobByEpisodeID(episodeID)
 	if err == nil && existingJob != nil {
 		if existingJob.Status == domain.DownloadStatusDownloading ||
 			existingJob.Status == domain.DownloadStatusQueued {
@@ -76,7 +91,7 @@ func (s *DownloadService) QueueEpisodeDownload(episodeID int64) error {
 }
 
 func (s *DownloadService) retryOrQueue(episodeID int64, isRetry bool) error {
-	nonFailedCount, err := s.repo.CountNonFailedJobs()
+	nonFailedCount, err := s.jobs.CountNonFailedJobs()
 	if err != nil {
 		return fmt.Errorf("could not count jobs: %w", err)
 	}
@@ -86,7 +101,7 @@ func (s *DownloadService) retryOrQueue(episodeID int64, isRetry bool) error {
 		Status:    domain.DownloadStatusQueued,
 	}
 
-	if err := s.repo.SaveDownloadJob(job); err != nil {
+	if err := s.jobs.SaveDownloadJob(job); err != nil {
 		return fmt.Errorf("could not queue job: %w", err)
 	}
 
@@ -98,7 +113,7 @@ func (s *DownloadService) retryOrQueue(episodeID int64, isRetry bool) error {
 }
 
 func (s *DownloadService) StartJob(jobID int64) error {
-	job, err := s.findJobByID(jobID)
+	job, err := s.jobs.FindDownloadJobByID(jobID)
 	if err != nil {
 		return err
 	}
@@ -108,7 +123,7 @@ func (s *DownloadService) StartJob(jobID int64) error {
 		return fmt.Errorf("job is not in a startable state: %s", job.Status)
 	}
 
-	if err := s.repo.UpdateDownloadJobStatus(
+	if err := s.jobs.UpdateDownloadJobStatus(
 		jobID,
 		domain.DownloadStatusDownloading,
 		job.BytesDownloaded,
@@ -124,7 +139,7 @@ func (s *DownloadService) StartJob(jobID int64) error {
 }
 
 func (s *DownloadService) ResumeJob(jobID int64) error {
-	job, err := s.findJobByID(jobID)
+	job, err := s.jobs.FindDownloadJobByID(jobID)
 	if err != nil {
 		return err
 	}
@@ -134,7 +149,7 @@ func (s *DownloadService) ResumeJob(jobID int64) error {
 	}
 
 	job.Status = domain.DownloadStatusQueued
-	if err := s.repo.UpdateDownloadJobStatus(
+	if err := s.jobs.UpdateDownloadJobStatus(
 		jobID,
 		domain.DownloadStatusDownloading,
 		job.BytesDownloaded,
@@ -150,7 +165,7 @@ func (s *DownloadService) ResumeJob(jobID int64) error {
 }
 
 func (s *DownloadService) RetryJob(jobID int64) error {
-	job, err := s.findJobByID(jobID)
+	job, err := s.jobs.FindDownloadJobByID(jobID)
 	if err != nil {
 		return err
 	}
@@ -166,7 +181,7 @@ func (s *DownloadService) RetryJob(jobID int64) error {
 	job.Status = domain.DownloadStatusQueued
 	job.ErrorMessage = ""
 
-	if err := s.repo.UpdateDownloadJobStatus(
+	if err := s.jobs.UpdateDownloadJobStatus(
 		jobID,
 		domain.DownloadStatusDownloading,
 		job.BytesDownloaded,
@@ -182,7 +197,7 @@ func (s *DownloadService) RetryJob(jobID int64) error {
 }
 
 func (s *DownloadService) ListJobs() ([]domain.DownloadJob, error) {
-	return s.repo.FindAllDownloadJobs()
+	return s.jobs.FindAllDownloadJobs()
 }
 
 // DownloadJobView pairs a DownloadJob with its resolved episode/podcast titles
@@ -199,16 +214,16 @@ type DownloadJobView struct {
 // podcast titles resolved via the repository. Jobs whose episode is missing
 // (e.g. cascade-deleted) get an empty title rather than failing the whole call.
 func (s *DownloadService) ListJobsWithEpisodes() ([]DownloadJobView, error) {
-	jobs, err := s.repo.FindAllDownloadJobs()
+	jobs, err := s.jobs.FindAllDownloadJobs()
 	if err != nil {
 		return nil, err
 	}
 	views := make([]DownloadJobView, 0, len(jobs))
 	for _, job := range jobs {
 		view := DownloadJobView{DownloadJob: job}
-		if ep, err := s.repo.FindEpisodeByID(job.EpisodeID); err == nil && ep != nil {
+		if ep, err := s.episodes.FindEpisodeByID(job.EpisodeID); err == nil && ep != nil {
 			view.EpisodeTitle = ep.Title
-			if p, err := s.repo.FindByID(ep.PodcastID); err == nil && p != nil {
+			if p, err := s.podcasts.FindByID(ep.PodcastID); err == nil && p != nil {
 				view.PodcastTitle = p.Title
 			}
 		}
@@ -217,28 +232,13 @@ func (s *DownloadService) ListJobsWithEpisodes() ([]DownloadJobView, error) {
 	return views, nil
 }
 
-func (s *DownloadService) findJobByID(jobID int64) (*domain.DownloadJob, error) {
-	jobs, err := s.repo.FindAllDownloadJobs()
-	if err != nil {
-		return nil, err
-	}
-
-	for _, job := range jobs {
-		if job.ID == jobID {
-			return &job, nil
-		}
-	}
-
-	return nil, fmt.Errorf("job not found: %d", jobID)
-}
-
 func (s *DownloadService) runDownload(jobID int64) {
-	job, err := s.findJobByID(jobID)
+	job, err := s.jobs.FindDownloadJobByID(jobID)
 	if err != nil {
 		return
 	}
 
-	episode, err := s.repo.FindEpisodeByID(job.EpisodeID)
+	episode, err := s.episodes.FindEpisodeByID(job.EpisodeID)
 	if err != nil || episode == nil {
 		s.failJob(job, fmt.Sprintf("could not find episode: %v", err))
 		return
@@ -328,7 +328,7 @@ func (s *DownloadService) runDownload(jobID int64) {
 			return
 		}
 		job.BytesDownloaded = 0
-		if err := s.repo.UpdateDownloadJobStatus(
+		if err := s.jobs.UpdateDownloadJobStatus(
 			jobID,
 			domain.DownloadStatusDownloading,
 			0,
@@ -410,7 +410,7 @@ func (s *DownloadService) runDownload(jobID int64) {
 	// transient failure can resume from the partial .part file (issue #1).
 	// The earlier status update only wrote counters; SupportsResume was never
 	// persisted, which made the resume branch above unreachable on retry.
-	if err := s.repo.UpdateDownloadJobProgress(job); err != nil {
+	if err := s.jobs.UpdateDownloadJobProgress(job); err != nil {
 		s.failJob(job, fmt.Sprintf("could not persist job progress: %v", err))
 		return
 	}
@@ -440,7 +440,7 @@ func (s *DownloadService) runDownload(jobID int64) {
 			// delta against the last reported byte count, so updates fire
 			// regularly regardless of chunk size or alignment (issue #2).
 			if job.BytesDownloaded-lastReported >= progressInterval {
-				if err := s.repo.UpdateDownloadJobStatus(
+				if err := s.jobs.UpdateDownloadJobStatus(
 					jobID,
 					domain.DownloadStatusDownloading,
 					job.BytesDownloaded,
@@ -466,7 +466,7 @@ func (s *DownloadService) runDownload(jobID int64) {
 	// Always publish a final update so the UI reaches 100% near completion,
 	// even when the last chunk was smaller than the throttle interval (issue #2).
 	if bytesWrittenThisRun > 0 {
-		if err := s.repo.UpdateDownloadJobStatus(
+		if err := s.jobs.UpdateDownloadJobStatus(
 			jobID,
 			domain.DownloadStatusDownloading,
 			job.BytesDownloaded,
@@ -485,13 +485,13 @@ func (s *DownloadService) runDownload(jobID int64) {
 		return
 	}
 
-	if err := s.repo.MarkEpisodeDownloaded(job.EpisodeID, finalPath); err != nil {
+	if err := s.episodes.MarkEpisodeDownloaded(job.EpisodeID, finalPath); err != nil {
 		s.failJob(job, fmt.Sprintf("could not mark episode as downloaded: %v", err))
 		return
 	}
 
-	if err := s.repo.DeleteDownloadJob(jobID); err != nil {
-		fmt.Printf("Warning: could not delete job: %v\n", err)
+	if err := s.jobs.DeleteDownloadJob(jobID); err != nil {
+		s.logger.Warn("could not delete completed job", "job_id", jobID, "err", err)
 	}
 }
 
@@ -501,17 +501,17 @@ func (s *DownloadService) runDownload(jobID int64) {
 // actually written before the failure.
 func (s *DownloadService) failJob(job *domain.DownloadJob, errorMsg string) {
 	if job == nil {
-		fmt.Printf("Warning: could not fail job: nil job\n")
+		s.logger.Warn("could not fail job: nil job")
 		return
 	}
-	if err := s.repo.UpdateDownloadJobStatus(
+	if err := s.jobs.UpdateDownloadJobStatus(
 		job.ID,
 		domain.DownloadStatusFailed,
 		job.BytesDownloaded,
 		job.BytesTotal,
 		errorMsg,
 	); err != nil {
-		fmt.Printf("Warning: could not update job status: %v\n", err)
+		s.logger.Warn("could not update job status on failure", "job_id", job.ID, "err", err)
 	}
 }
 

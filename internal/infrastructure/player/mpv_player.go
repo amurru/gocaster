@@ -3,7 +3,6 @@ package player
 import (
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 
@@ -11,19 +10,12 @@ import (
 	"github.com/gen2brain/go-mpv"
 )
 
-var playerDebugEnabled = os.Getenv("DEBUG") != ""
-
-func playerDebugf(format string, args ...any) {
-	if playerDebugEnabled {
-		fmt.Printf("[player] "+format+"\n", args...)
-	}
-}
-
 type MPVPlayer struct {
 	mu          sync.Mutex
 	mpv         *mpv.Mpv
 	source      string
 	audioOutput string
+	logger      domain.Logger
 }
 
 // MPVOption configures an MPVPlayer at construction.
@@ -40,6 +32,26 @@ func WithAudioOutput(ao string) MPVOption {
 	}
 }
 
+// WithLogger injects a structured logger used for debug diagnostics, replacing
+// the previous magic DEBUG-env-var-gated playerDebugf that wrote to stdout and
+// corrupted the TUI (issue #14). When unset, diagnostics are discarded.
+func WithLogger(logger domain.Logger) MPVOption {
+	return func(p *MPVPlayer) {
+		if logger != nil {
+			p.logger = logger
+		}
+	}
+}
+
+// debug emits a player diagnostic via the injected logger (issue #14). It is a
+// no-op when no logger is wired in, preserving the previous opt-in behavior
+// without the magic DEBUG env var or stdout writes.
+func (p *MPVPlayer) debug(msg string, args ...any) {
+	if p.logger != nil {
+		p.logger.Debug(msg, args...)
+	}
+}
+
 func NewMPVPlayer(opts ...MPVOption) domain.Player {
 	p := &MPVPlayer{audioOutput: "auto"}
 	for _, opt := range opts {
@@ -52,16 +64,16 @@ func NewMPVPlayer(opts ...MPVOption) domain.Player {
 func (p *MPVPlayer) initMPV() {
 	p.mpv = mpv.New()
 	if p.mpv == nil {
-		playerDebugf("mpv.New() returned nil")
+		p.debug("mpv.New() returned nil")
 		return
 	}
 
-	playerDebugf("mpv client created, API version: %d", p.mpv.APIVersion())
+	p.debug("mpv client created", "api_version", p.mpv.APIVersion())
 
 	// Audio-only config. Surface set-option errors instead of discarding them
 	// so a misconfigured backend is diagnosable rather than silently broken.
 	if err := p.mpv.SetOptionString("vo", "null"); err != nil {
-		playerDebugf("vo=null failed: %v", err)
+		p.debug("vo=null failed", "err", err)
 	}
 	// Only pin ao when the user explicitly configures a backend; "auto" lets
 	// mpv autodetect (the safe default across PulseAudio/PipeWire/ALSA/JACK/
@@ -69,23 +81,23 @@ func (p *MPVPlayer) initMPV() {
 	// systems (issue #4).
 	if p.audioOutput != "" && p.audioOutput != "auto" {
 		if err := p.mpv.SetOptionString("ao", p.audioOutput); err != nil {
-			playerDebugf("ao=%s failed: %v", p.audioOutput, err)
+			p.debug("ao option failed", "ao", p.audioOutput, "err", err)
 		}
 	}
 	if err := p.mpv.SetOptionString("idle", "yes"); err != nil {
-		playerDebugf("idle=yes failed: %v", err)
+		p.debug("idle=yes failed", "err", err)
 	}
 	if err := p.mpv.SetOptionString("keep-open", "yes"); err != nil {
-		playerDebugf("keep-open=yes failed: %v", err)
+		p.debug("keep-open=yes failed", "err", err)
 	}
 
 	if err := p.mpv.Initialize(); err != nil {
-		playerDebugf("Initialize failed: %v", err)
+		p.debug("Initialize failed", "err", err)
 		p.mpv = nil
 		return
 	}
 
-	playerDebugf("mpv initialized successfully")
+	p.debug("mpv initialized successfully")
 }
 
 func (p *MPVPlayer) Play(source string) error {
@@ -96,22 +108,22 @@ func (p *MPVPlayer) Play(source string) error {
 		return errors.New("libmpv not available")
 	}
 
-	playerDebugf("Loading: %s", source)
+	p.debug("loading source", "source", source)
 
 	// Use Command with array - more reliable than CommandString
 	err := p.mpv.Command([]string{"loadfile", source, "replace"})
 	if err != nil {
-		playerDebugf("loadfile error: %v (source=%q)", err, source)
+		p.debug("loadfile error", "source", source, "err", err)
 		return fmt.Errorf("failed to load file: %w", err)
 	}
 
 	// Unpause if needed
 	if err := p.mpv.SetPropertyString("pause", "no"); err != nil {
-		playerDebugf("SetPropertyString pause error: %v", err)
+		p.debug("SetPropertyString pause error", "err", err)
 	}
 
 	p.source = source
-	playerDebugf("Playback started")
+	p.debug("playback started")
 	return nil
 }
 

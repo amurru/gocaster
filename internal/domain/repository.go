@@ -1,21 +1,33 @@
 package domain
 
-// Repository defines the contract for data persistence.
-type PodcastRepository interface {
+// PodcastRepo is the persistence port for podcast aggregates (issue #17).
+type PodcastRepo interface {
 	Save(podcast *Podcast) error
 	FindAll() ([]Podcast, error)
 	FindByID(id int64) (*Podcast, error)
 	Delete(id int64) error
+}
 
-	// Episodes
+// EpisodeRepo is the persistence port for episodes and the cross-concern of
+// marking an episode downloaded on job completion (issue #17).
+type EpisodeRepo interface {
 	SaveEpisode(episode *Episode) error
 	FindEpisodesByPodcastID(id int64) ([]Episode, error)
 	FindEpisodeByID(id int64) (*Episode, error)
 	UpdateEpisodePlaybackState(id int64, isPlayed bool) error
 	DeleteEpisode(id int64) error
 
-	// Download Jobs
+	// Mark episode as downloaded (called on job completion).
+	MarkEpisodeDownloaded(episodeID int64, localPath string) error
+}
+
+// DownloadJobRepo is the persistence port for download jobs (issue #17).
+type DownloadJobRepo interface {
 	SaveDownloadJob(job *DownloadJob) error
+	// FindDownloadJobByID loads a single job by primary key, replacing the
+	// previous O(N) FindAllDownloadJobs scan that DownloadService ran on every
+	// status update.
+	FindDownloadJobByID(id int64) (*DownloadJob, error)
 	FindDownloadJobByEpisodeID(episodeID int64) (*DownloadJob, error)
 	FindAllDownloadJobs() ([]DownloadJob, error)
 	UpdateDownloadJobStatus(id int64, status DownloadStatus, bytesDownloaded int64, bytesTotal int64, errorMsg string) error
@@ -27,7 +39,14 @@ type PodcastRepository interface {
 	UpdateDownloadJobProgress(job *DownloadJob) error
 	CountNonFailedJobs() (int, error)
 	DeleteDownloadJob(id int64) error
+}
 
-	// Mark episode as downloaded (called on job completion)
-	MarkEpisodeDownloaded(episodeID int64, localPath string) error
+// PodcastRepository is the union of the three focused repository ports. It
+// exists so the concrete SQLiteRepo and the composition root (main.go) can keep
+// depending on a single type while individual services depend only on the
+// narrow port they use (Interface Segregation Principle, issue #17).
+type PodcastRepository interface {
+	PodcastRepo
+	EpisodeRepo
+	DownloadJobRepo
 }

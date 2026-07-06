@@ -301,6 +301,20 @@ func (r *SQLiteRepo) FindDownloadJobByEpisodeID(episodeID int64) (*domain.Downlo
 	return &j, nil
 }
 
+// FindDownloadJobByID loads a single job by primary key. It replaces the
+// previous DownloadService.findJobByID helper, which called FindAllDownloadJobs
+// and iterated the whole table on every status update (issue #17 perf bug).
+func (r *SQLiteRepo) FindDownloadJobByID(id int64) (*domain.DownloadJob, error) {
+	query := `SELECT id, episode_id, status, bytes_downloaded, bytes_total, temp_path, final_path, etag, last_modified, supports_resume, error_message, created_at, updated_at FROM downloads WHERE id = ?`
+	var j domain.DownloadJob
+	err := r.db.QueryRow(query, id).
+		Scan(&j.ID, &j.EpisodeID, &j.Status, &j.BytesDownloaded, &j.BytesTotal, &j.TempPath, &j.FinalPath, &j.ETag, &j.LastModified, &j.SupportsResume, &j.ErrorMessage, &j.CreatedAt, &j.UpdatedAt)
+	if err != nil {
+		return nil, err
+	}
+	return &j, nil
+}
+
 func (r *SQLiteRepo) FindAllDownloadJobs() ([]domain.DownloadJob, error) {
 	query := `SELECT id, episode_id, status, bytes_downloaded, bytes_total, temp_path, final_path, etag, last_modified, supports_resume, error_message, created_at, updated_at FROM downloads ORDER BY updated_at DESC`
 	rows, err := r.db.Query(query)
