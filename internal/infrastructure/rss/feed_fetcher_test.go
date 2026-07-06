@@ -35,6 +35,12 @@ func TestParseDuration(t *testing.T) {
 		{"ISO malformed unknown unit", "PT1X", 0},
 		{"single colon", ":", 0},
 		{"four colon parts", "1:2:3:4", 0},
+
+		// Trailing garbage must be rejected (strconv.Atoi, not permissive
+		// fmt.Sscanf). "30abc" should be 0, not 30.
+		{"trailing garbage seconds", "30abc", 0},
+		{"trailing garbage MM:SS", "45:30xyz", 0},
+		{"trailing garbage HH:MM:SS", "1:2:3junk", 0},
 	}
 
 	for _, tt := range tests {

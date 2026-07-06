@@ -2,7 +2,7 @@ package rss
 
 import (
 	"context"
-	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -85,26 +85,29 @@ func parseDuration(duration string) int {
 
 	parts := strings.Split(duration, ":")
 
-	var hours, minutes, seconds int
-
 	switch len(parts) {
 	case 1:
-		// Format: seconds as an integer. Check the Sscanf return so malformed
-		// input (e.g. "abc") falls through to 0 instead of silently returning
-		// an uninitialized value.
-		if n, _ := fmt.Sscanf(duration, "%d", &seconds); n != 1 {
+		// Format: seconds as an integer. strconv.Atoi (unlike fmt.Sscanf) rejects
+		// trailing garbage like "30abc", which should map to 0 not 30.
+		seconds, err := strconv.Atoi(duration)
+		if err != nil {
 			return 0
 		}
 		return seconds
 	case 2:
-		// Format: MM:SS
-		if n, _ := fmt.Sscanf(duration, "%d:%d", &minutes, &seconds); n != 2 {
+		// Format: MM:SS — each part must be a pure integer.
+		minutes, err1 := strconv.Atoi(parts[0])
+		seconds, err2 := strconv.Atoi(parts[1])
+		if err1 != nil || err2 != nil {
 			return 0
 		}
 		return minutes*60 + seconds
 	case 3:
-		// Format: HH:MM:SS
-		if n, _ := fmt.Sscanf(duration, "%d:%d:%d", &hours, &minutes, &seconds); n != 3 {
+		// Format: HH:MM:SS — each part must be a pure integer.
+		hours, err1 := strconv.Atoi(parts[0])
+		minutes, err2 := strconv.Atoi(parts[1])
+		seconds, err3 := strconv.Atoi(parts[2])
+		if err1 != nil || err2 != nil || err3 != nil {
 			return 0
 		}
 		return hours*3600 + minutes*60 + seconds
