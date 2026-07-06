@@ -43,7 +43,7 @@ vet:
 
 
 # Check code quality
-check: fmt vet lint test
+check: format vet lint test
 
 # Clean test artifacts
 clean-test:

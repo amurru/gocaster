@@ -8,9 +8,29 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/amurru/gocaster/internal/domain"
 )
+
+// progressInterval is the minimum delta in bytes between progress updates.
+const progressInterval = 1 << 20 // 1 MiB
+
+// stallTimeout is the maximum interval allowed between two successful body
+// reads during a download. A server that accepts the connection and sends
+// headers but then stops streaming data is treated as stalled and the download
+// is failed, so its goroutine does not block forever (issue #6).
+const stallTimeout = 60 * time.Second
+
+// downloadTransport limits how long connecting and waiting for response headers
+// may take. It deliberately does NOT cap the overall request duration, which
+// would abort legitimate large downloads; an active stream is instead bounded
+// by the per-read stallTimeout enforced via timeoutReader in runDownload.
+var downloadTransport = &http.Transport{
+	IdleConnTimeout:       60 * time.Second,
+	ResponseHeaderTimeout: 30 * time.Second,
+	ExpectContinueTimeout: 10 * time.Second,
+}
 
 type DownloadService struct {
 	repo        domain.PodcastRepository
@@ -20,8 +40,10 @@ type DownloadService struct {
 
 func NewDownloadService(repo domain.PodcastRepository, downloadDir string) *DownloadService {
 	return &DownloadService{
-		repo:        repo,
-		http:        &http.Client{},
+		repo: repo,
+		http: &http.Client{
+			Transport: downloadTransport,
+		},
 		downloadDir: downloadDir,
 	}
 }
@@ -137,16 +159,18 @@ func (s *DownloadService) RetryJob(jobID int64) error {
 		return fmt.Errorf("job is not failed: %s", job.Status)
 	}
 
+	// Preserve BytesDownloaded/BytesTotal/SupportsResume so the retry resumes
+	// from the partial .part file rather than restarting from scratch (issue
+	// #1). Only the status and error message are cleared. The resume branch in
+	// runDownload is taken when BytesDownloaded > 0 && SupportsResume.
 	job.Status = domain.DownloadStatusQueued
-	job.BytesDownloaded = 0
-	job.BytesTotal = 0
 	job.ErrorMessage = ""
 
 	if err := s.repo.UpdateDownloadJobStatus(
 		jobID,
 		domain.DownloadStatusDownloading,
-		0,
-		0,
+		job.BytesDownloaded,
+		job.BytesTotal,
 		"",
 	); err != nil {
 		return fmt.Errorf("could not retry job: %w", err)
@@ -183,8 +207,8 @@ func (s *DownloadService) runDownload(jobID int64) {
 	}
 
 	episode, err := s.repo.FindEpisodeByID(job.EpisodeID)
-	if err != nil {
-		s.failJob(jobID, fmt.Sprintf("could not find episode: %v", err))
+	if err != nil || episode == nil {
+		s.failJob(job, fmt.Sprintf("could not find episode: %v", err))
 		return
 	}
 
@@ -208,49 +232,89 @@ func (s *DownloadService) runDownload(jobID int64) {
 			file, err = os.Create(partPath)
 		}
 		if err != nil {
-			s.failJob(jobID, fmt.Sprintf("could not create file: %v", err))
+			s.failJob(job, fmt.Sprintf("could not create file: %v", err))
 			return
 		}
 	}
 	defer file.Close()
 
 	var req *http.Request
-	var resumeOffset int64
+	requestedRange := false
 
 	if job.BytesDownloaded > 0 && job.SupportsResume {
-		file.Seek(0, io.SeekEnd)
-		currentSize, _ := file.Stat()
-		resumeOffset = currentSize.Size()
+		if _, err := file.Seek(0, io.SeekEnd); err != nil {
+			s.failJob(job, fmt.Sprintf("could not seek resume position: %v", err))
+			return
+		}
+		info, err := file.Stat()
+		if err != nil {
+			s.failJob(job, fmt.Sprintf("could not stat partial file: %v", err))
+			return
+		}
+		resumeOffset := info.Size()
 
-		req, _ = http.NewRequest("GET", url, nil)
+		req, err = http.NewRequest("GET", url, nil)
+		if err != nil {
+			s.failJob(job, fmt.Sprintf("could not build resume request: %v", err))
+			return
+		}
 		req.Header.Add("Range", fmt.Sprintf("bytes=%d-", resumeOffset))
+		requestedRange = true
 	} else {
-		file.Truncate(0)
-		req, _ = http.NewRequest("GET", url, nil)
+		if err := file.Truncate(0); err != nil {
+			s.failJob(job, fmt.Sprintf("could not reset partial file: %v", err))
+			return
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			s.failJob(job, fmt.Sprintf("could not reset write position: %v", err))
+			return
+		}
+		req, err = http.NewRequest("GET", url, nil)
+		if err != nil {
+			s.failJob(job, fmt.Sprintf("could not build request: %v", err))
+			return
+		}
 	}
 
 	resp, err := s.http.Do(req)
 	if err != nil {
-		s.failJob(jobID, fmt.Sprintf("request failed: %v", err))
+		s.failJob(job, fmt.Sprintf("request failed: %v", err))
 		return
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusRequestedRangeNotSatisfiable {
-		file.Truncate(0)
+		// Truncate resizes the file but does NOT move the write offset, which
+		// a prior Seek(0, SeekEnd) in the resume branch left at resumeOffset.
+		// Reset both to avoid writing a sparse/corrupt file.
+		if err := file.Truncate(0); err != nil {
+			s.failJob(job, fmt.Sprintf("could not reset partial file: %v", err))
+			return
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			s.failJob(job, fmt.Sprintf("could not reset write position: %v", err))
+			return
+		}
 		job.BytesDownloaded = 0
-		s.repo.UpdateDownloadJobStatus(
+		if err := s.repo.UpdateDownloadJobStatus(
 			jobID,
 			domain.DownloadStatusDownloading,
 			0,
 			job.BytesTotal,
 			"",
-		)
+		); err != nil {
+			s.failJob(job, fmt.Sprintf("could not update job status: %v", err))
+			return
+		}
 
-		req2, _ := http.NewRequest("GET", url, nil)
+		req2, err := http.NewRequest("GET", url, nil)
+		if err != nil {
+			s.failJob(job, fmt.Sprintf("could not rebuild request: %v", err))
+			return
+		}
 		resp2, err := s.http.Do(req2)
 		if err != nil {
-			s.failJob(jobID, fmt.Sprintf("request failed: %v", err))
+			s.failJob(job, fmt.Sprintf("request failed: %v", err))
 			return
 		}
 		defer resp2.Body.Close()
@@ -258,8 +322,24 @@ func (s *DownloadService) runDownload(jobID int64) {
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		s.failJob(jobID, fmt.Sprintf("server returned: %s", resp.Status))
+		s.failJob(job, fmt.Sprintf("server returned: %s", resp.Status))
 		return
+	}
+
+	// We sent a Range request but the server ignored it and is streaming the
+	// full body (200 OK). The partial file is at resumeOffset; if we kept
+	// writing there we'd produce a sparse/corrupt file. Reset both the file
+	// and the counters so the body is written from offset 0.
+	if requestedRange && resp.StatusCode == http.StatusOK {
+		if err := file.Truncate(0); err != nil {
+			s.failJob(job, fmt.Sprintf("could not reset partial file: %v", err))
+			return
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			s.failJob(job, fmt.Sprintf("could not reset write position: %v", err))
+			return
+		}
+		job.BytesDownloaded = 0
 	}
 
 	if job.BytesTotal == 0 {
@@ -277,11 +357,11 @@ func (s *DownloadService) runDownload(jobID int64) {
 		finalPath = filepath.Join(s.downloadDir, filename)
 	}
 
-	if resp.StatusCode == http.StatusPartialContent {
-		job.SupportsResume = true
-	} else {
-		job.SupportsResume = false
-	}
+	// A server signals range-request support either by returning 206 in
+	// response to our Range header, or by advertising "Accept-Ranges: bytes"
+	// on any response. Either is sufficient to enable resume on a retry.
+	job.SupportsResume = resp.StatusCode == http.StatusPartialContent ||
+		strings.EqualFold(strings.TrimSpace(resp.Header.Get("Accept-Ranges")), "bytes")
 
 	if etag := resp.Header.Get("ETag"); etag != "" {
 		job.ETag = etag
@@ -293,36 +373,52 @@ func (s *DownloadService) runDownload(jobID int64) {
 	job.TempPath = partPath
 	job.FinalPath = finalPath
 
-	s.repo.UpdateDownloadJobStatus(
-		jobID,
-		domain.DownloadStatusDownloading,
-		job.BytesDownloaded,
-		job.BytesTotal,
-		"",
-	)
+	// Persist the resume-relevant metadata (paths, SupportsResume, ETag,
+	// Last-Modified) alongside the byte counters so that a retry after a
+	// transient failure can resume from the partial .part file (issue #1).
+	// The earlier status update only wrote counters; SupportsResume was never
+	// persisted, which made the resume branch above unreachable on retry.
+	if err := s.repo.UpdateDownloadJobProgress(job); err != nil {
+		s.failJob(job, fmt.Sprintf("could not persist job progress: %v", err))
+		return
+	}
 
+	// lastReported is the byte count at which we last persisted progress; we
+	// publish an update only once we cross progressInterval beyond it.
 	buf := make([]byte, 32*1024)
-	var wrote int64
+	var bytesWrittenThisRun int64
+	lastReported := job.BytesDownloaded
+
+	// Wrap the body so a stalled stream (server stops sending mid-download)
+	// fails after stallTimeout instead of blocking the goroutine forever.
+	body := newTimeoutReader(resp.Body, stallTimeout)
 
 	for {
-		n, readErr := resp.Body.Read(buf)
+		n, readErr := body.Read(buf)
 		if n > 0 {
 			wn, writeErr := file.Write(buf[:n])
 			if writeErr != nil {
-				s.failJob(jobID, fmt.Sprintf("write failed: %v", writeErr))
+				s.failJob(job, fmt.Sprintf("write failed: %v", writeErr))
 				return
 			}
-			wrote += int64(wn)
+			bytesWrittenThisRun += int64(wn)
 			job.BytesDownloaded += int64(wn)
 
-			if job.BytesTotal > 0 && job.BytesDownloaded%1024000 < int64(n) {
-				s.repo.UpdateDownloadJobStatus(
+			// Throttle progress updates to a steady ~1 MiB cadence using a
+			// delta against the last reported byte count, so updates fire
+			// regularly regardless of chunk size or alignment (issue #2).
+			if job.BytesDownloaded-lastReported >= progressInterval {
+				if err := s.repo.UpdateDownloadJobStatus(
 					jobID,
 					domain.DownloadStatusDownloading,
 					job.BytesDownloaded,
 					job.BytesTotal,
 					"",
-				)
+				); err != nil {
+					s.failJob(job, fmt.Sprintf("could not update job status: %v", err))
+					return
+				}
+				lastReported = job.BytesDownloaded
 			}
 		}
 
@@ -330,7 +426,22 @@ func (s *DownloadService) runDownload(jobID int64) {
 			if readErr == io.EOF {
 				break
 			}
-			s.failJob(jobID, fmt.Sprintf("read failed: %v", readErr))
+			s.failJob(job, fmt.Sprintf("read failed: %v", readErr))
+			return
+		}
+	}
+
+	// Always publish a final update so the UI reaches 100% near completion,
+	// even when the last chunk was smaller than the throttle interval (issue #2).
+	if bytesWrittenThisRun > 0 {
+		if err := s.repo.UpdateDownloadJobStatus(
+			jobID,
+			domain.DownloadStatusDownloading,
+			job.BytesDownloaded,
+			job.BytesTotal,
+			"",
+		); err != nil {
+			s.failJob(job, fmt.Sprintf("could not update job status: %v", err))
 			return
 		}
 	}
@@ -338,12 +449,12 @@ func (s *DownloadService) runDownload(jobID int64) {
 	file.Close()
 
 	if err := os.Rename(partPath, finalPath); err != nil {
-		s.failJob(jobID, fmt.Sprintf("rename failed: %v", err))
+		s.failJob(job, fmt.Sprintf("rename failed: %v", err))
 		return
 	}
 
 	if err := s.repo.MarkEpisodeDownloaded(job.EpisodeID, finalPath); err != nil {
-		s.failJob(jobID, fmt.Sprintf("could not mark episode as downloaded: %v", err))
+		s.failJob(job, fmt.Sprintf("could not mark episode as downloaded: %v", err))
 		return
 	}
 
@@ -352,15 +463,62 @@ func (s *DownloadService) runDownload(jobID int64) {
 	}
 }
 
-func (s *DownloadService) failJob(jobID int64, errorMsg string) {
+// failJob marks job as failed while preserving the byte counters so a later
+// retry can resume from the partial .part file on disk (issue #1). Only the
+// status and error message change; BytesDownloaded/BytesTotal reflect what was
+// actually written before the failure.
+func (s *DownloadService) failJob(job *domain.DownloadJob, errorMsg string) {
+	if job == nil {
+		fmt.Printf("Warning: could not fail job: nil job\n")
+		return
+	}
 	if err := s.repo.UpdateDownloadJobStatus(
-		jobID,
+		job.ID,
 		domain.DownloadStatusFailed,
-		0,
-		0,
+		job.BytesDownloaded,
+		job.BytesTotal,
 		errorMsg,
 	); err != nil {
 		fmt.Printf("Warning: could not update job status: %v\n", err)
+	}
+}
+
+// timeoutReader wraps an io.Reader and fails a Read if no data arrives within
+// timeout since the last successful Read (or since construction). This bounds
+// how long a stalled download body can block runDownload, complementing the
+// connection/header timeouts on downloadTransport (issue #6). Large legitimate
+// downloads are unaffected because the deadline resets on every Read that
+// returns data.
+type timeoutReader struct {
+	r       io.Reader
+	timeout time.Duration
+}
+
+func newTimeoutReader(r io.Reader, timeout time.Duration) *timeoutReader {
+	return &timeoutReader{r: r, timeout: timeout}
+}
+
+func (t *timeoutReader) Read(p []byte) (int, error) {
+	type readResult struct {
+		n   int
+		err error
+	}
+	resultCh := make(chan readResult, 1)
+	go func() {
+		n, err := t.r.Read(p)
+		resultCh <- readResult{n, err}
+	}()
+
+	timer := time.NewTimer(t.timeout)
+	defer timer.Stop()
+
+	select {
+	case res := <-resultCh:
+		return res.n, res.err
+	case <-timer.C:
+		// Best-effort: signal the goroutine to give up. The underlying body's
+		// Close (deferred by the caller) reclaims its resources.
+		return 0, fmt.Errorf("download stalled: no data for %s", t.timeout)
 	}
 }
 
