@@ -231,3 +231,30 @@ func TestSaveRejectsMissingDiscordClientIDWhenPresenceEnabled(t *testing.T) {
 		t.Fatal("Save should reject discord_presence_enabled without discord_client_id")
 	}
 }
+
+// TestAudioOutputParsing verifies the audio_output config field is parsed from
+// TOML and that an empty/whitespace value falls back to "auto" (issue #4).
+func TestAudioOutputParsing(t *testing.T) {
+	cfg := Config{}
+	_, err := toml.Decode(`audio_output = "alsa"`, &cfg)
+	if err != nil {
+		t.Fatalf("toml decode failed: %v", err)
+	}
+	if cfg.AudioOutput != "alsa" {
+		t.Errorf("audio_output = %q, want %q", cfg.AudioOutput, "alsa")
+	}
+}
+
+func TestAudioOutputDefault(t *testing.T) {
+	for _, in := range []string{"", "   ", "\t"} {
+		if got := normalizeAudioOutput(in); got != defaultAudioOutput {
+			t.Errorf("for input %q, normalized = %q, want %q", in, got, defaultAudioOutput)
+		}
+	}
+	if got := normalizeAudioOutput("pulse"); got != "pulse" {
+		t.Errorf("for input %q, normalized = %q, want %q", "pulse", got, "pulse")
+	}
+	if got := normalizeAudioOutput("  pipewire  "); got != "pipewire" {
+		t.Errorf("for input %q, normalized = %q, want %q", "  pipewire  ", got, "pipewire")
+	}
+}

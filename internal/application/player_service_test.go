@@ -149,6 +149,7 @@ func (m *mockRepo) FindAllDownloadJobs() ([]domain.DownloadJob, error) { return 
 func (m *mockRepo) UpdateDownloadJobStatus(id int64, status domain.DownloadStatus, bytesDownloaded int64, bytesTotal int64, errorMsg string) error {
 	return nil
 }
+func (m *mockRepo) UpdateDownloadJobProgress(job *domain.DownloadJob) error       { return nil }
 func (m *mockRepo) CountNonFailedJobs() (int, error)                              { return 0, nil }
 func (m *mockRepo) DeleteDownloadJob(id int64) error                              { return nil }
 func (m *mockRepo) MarkEpisodeDownloaded(episodeID int64, localPath string) error { return nil }

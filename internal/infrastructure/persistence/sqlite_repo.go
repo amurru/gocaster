@@ -348,6 +348,32 @@ func (r *SQLiteRepo) UpdateDownloadJobStatus(
 	return err
 }
 
+// UpdateDownloadJobProgress persists the resume-relevant fields of a job
+// (counters, temp/final paths, ETag, Last-Modified, SupportsResume) without
+// altering its status. This lets runDownload record that the server honored a
+// Range request so a subsequent retry can resume from the partial file.
+func (r *SQLiteRepo) UpdateDownloadJobProgress(job *domain.DownloadJob) error {
+	if job == nil {
+		return fmt.Errorf("cannot update progress for nil job")
+	}
+	query := `UPDATE downloads
+		SET bytes_downloaded = ?, bytes_total = ?, temp_path = ?, final_path = ?,
+		    etag = ?, last_modified = ?, supports_resume = ?, updated_at = CURRENT_TIMESTAMP
+		WHERE id = ?`
+	_, err := r.db.Exec(
+		query,
+		job.BytesDownloaded,
+		job.BytesTotal,
+		job.TempPath,
+		job.FinalPath,
+		job.ETag,
+		job.LastModified,
+		job.SupportsResume,
+		job.ID,
+	)
+	return err
+}
+
 func (r *SQLiteRepo) CountNonFailedJobs() (int, error) {
 	query := `SELECT COUNT(*) FROM downloads WHERE status != 'failed'`
 	var count int
