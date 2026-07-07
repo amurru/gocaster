@@ -97,13 +97,25 @@ func (r *SQLiteRepo) Close() error {
 	return r.db.Close()
 }
 
+// execer is the minimal interface both *sql.DB and *sql.Tx satisfy, so the
+// private save*/mark*/delete* helpers can run against either (issue #13).
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 func (r *SQLiteRepo) Save(ctx context.Context, podcast *domain.Podcast) error {
+	return savePodcast(ctx, r.db, podcast)
+}
+
+// savePodcast inserts a new podcast (when ID == 0) or updates an existing one.
+// Takes an execer so it can run against either the pool or a transaction.
+func savePodcast(ctx context.Context, ex execer, podcast *domain.Podcast) error {
 	if podcast.ID == 0 {
 		query := `
 			INSERT INTO podcasts (title, feed_url, description, image_url, last_updated)
 			VALUES (?, ?, ?, ?, ?)
 		`
-		result, err := r.db.ExecContext(
+		result, err := ex.ExecContext(
 			ctx,
 			query,
 			podcast.Title,
@@ -129,7 +141,7 @@ func (r *SQLiteRepo) Save(ctx context.Context, podcast *domain.Podcast) error {
 		UPDATE podcasts SET title = ?, feed_url = ?, description = ?, image_url = ?, last_updated = ?
 		WHERE id = ?
 	`
-	_, err := r.db.ExecContext(
+	_, err := ex.ExecContext(
 		ctx,
 		query,
 		podcast.Title,
@@ -180,11 +192,17 @@ func (r *SQLiteRepo) Delete(ctx context.Context, id int64) error {
 }
 
 func (r *SQLiteRepo) SaveEpisode(ctx context.Context, episode *domain.Episode) error {
+	return saveEpisode(ctx, r.db, episode)
+}
+
+// saveEpisode inserts an episode. Takes an execer so it can run inside a
+// transaction. On success episode.ID reflects the newly assigned row.
+func saveEpisode(ctx context.Context, ex execer, episode *domain.Episode) error {
 	query := `
 		INSERT INTO episodes (podcast_id, title, description, audio_url, published_at, playback_duration, is_played, is_downloaded, local_path)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	result, err := r.db.ExecContext(
+	result, err := ex.ExecContext(
 		ctx,
 		query,
 		episode.PodcastID,
@@ -403,12 +421,95 @@ func (r *SQLiteRepo) CountNonFailedJobs(ctx context.Context) (int, error) {
 }
 
 func (r *SQLiteRepo) DeleteDownloadJob(ctx context.Context, id int64) error {
-	_, err := r.db.ExecContext(ctx, `DELETE FROM downloads WHERE id = ?`, id)
+	return deleteDownloadJob(ctx, r.db, id)
+}
+
+// deleteDownloadJob removes a download-job row. Takes an execer so it can run
+// inside the download-completion transaction.
+func deleteDownloadJob(ctx context.Context, ex execer, id int64) error {
+	_, err := ex.ExecContext(ctx, `DELETE FROM downloads WHERE id = ?`, id)
 	return err
 }
 
 func (r *SQLiteRepo) MarkEpisodeDownloaded(ctx context.Context, episodeID int64, localPath string) error {
+	return markEpisodeDownloaded(ctx, r.db, episodeID, localPath)
+}
+
+// markEpisodeDownloaded flips the downloaded flag and stores the local path.
+// Takes an execer so it can run inside the download-completion transaction.
+func markEpisodeDownloaded(ctx context.Context, ex execer, episodeID int64, localPath string) error {
 	query := `UPDATE episodes SET is_downloaded = 1, local_path = ? WHERE id = ?`
-	_, err := r.db.ExecContext(ctx, query, localPath, episodeID)
+	_, err := ex.ExecContext(ctx, query, localPath, episodeID)
 	return err
+}
+
+// runInTx runs fn inside a transaction bound to the caller's context (issue
+// #13). It commits iff fn returns nil, rolls back on any error, and re-panics
+// after rolling back on a panic so the caller's recover still sees it. A nil
+// error returned from fn does NOT guarantee commit success — the returned
+// error reflects the commit outcome.
+func (r *SQLiteRepo) runInTx(ctx context.Context, fn func(*sql.Tx) error) (err error) {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if p := recover(); p != nil {
+			_ = tx.Rollback()
+			panic(p)
+		}
+		if err != nil {
+			_ = tx.Rollback()
+			return
+		}
+		err = tx.Commit()
+	}()
+	return fn(tx)
+}
+
+// SavePodcastWithEpisodes inserts the podcast and every episode in a single
+// transaction (issue #13). All-or-nothing: a mid-loop failure rolls back the
+// podcast and any episodes saved so far. On success podcast.ID is set.
+func (r *SQLiteRepo) SavePodcastWithEpisodes(ctx context.Context, podcast *domain.Podcast, episodes []domain.Episode) error {
+	return r.runInTx(ctx, func(tx *sql.Tx) error {
+		if err := savePodcast(ctx, tx, podcast); err != nil {
+			return err
+		}
+		for i := range episodes {
+			episodes[i].PodcastID = podcast.ID
+			if err := saveEpisode(ctx, tx, &episodes[i]); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// AppendEpisodesAndTouchPodcast inserts the (already-filtered) new episodes and
+// updates the podcast's LastUpdated in a single transaction (issue #13). A
+// failure mid-batch rolls back both the inserts and the LastUpdated bump so the
+// feed is retried in full on the next refresh.
+func (r *SQLiteRepo) AppendEpisodesAndTouchPodcast(ctx context.Context, podcast *domain.Podcast, newEpisodes []domain.Episode) error {
+	return r.runInTx(ctx, func(tx *sql.Tx) error {
+		for i := range newEpisodes {
+			newEpisodes[i].PodcastID = podcast.ID
+			if err := saveEpisode(ctx, tx, &newEpisodes[i]); err != nil {
+				return err
+			}
+		}
+		return savePodcast(ctx, tx, podcast)
+	})
+}
+
+// CompleteDownload marks an episode downloaded and deletes its completed job
+// row in a single transaction (issue #13). The two writes must commit together
+// to keep the episode and downloads tables in sync. A job-row delete failure
+// now rolls back the mark, leaving the job intact for retry.
+func (r *SQLiteRepo) CompleteDownload(ctx context.Context, episodeID int64, localPath string, jobID int64) error {
+	return r.runInTx(ctx, func(tx *sql.Tx) error {
+		if err := markEpisodeDownloaded(ctx, tx, episodeID, localPath); err != nil {
+			return err
+		}
+		return deleteDownloadJob(ctx, tx, jobID)
+	})
 }

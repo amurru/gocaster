@@ -84,9 +84,9 @@ func run() error {
 	fetcher := rss.NewFeedFetcher()
 	// Services accept only the focused repository ports they use (issue #17);
 	// repo (SQLiteRepo) satisfies the union PodcastRepository, hence each port.
-	podcastSvc := application.NewPodcastService(repo, repo, fetcher, logger)
+	podcastSvc := application.NewPodcastService(repo, repo, repo, fetcher, logger)
 
-	downloadSvc := application.NewDownloadService(repo, repo, repo, cfg.DownloadPath, logger)
+	downloadSvc := application.NewDownloadService(repo, repo, repo, repo, cfg.DownloadPath, logger)
 	// Parent every per-job download context from the root so cancelling the
 	// root (shutdown / Ctrl-C) cancels every in-flight download (issue #11).
 	downloadSvc.SetRootContext(ctx)

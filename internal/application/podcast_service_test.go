@@ -68,7 +68,7 @@ func TestPodcastService_AddPodcastPersistsEpisodes(t *testing.T) {
 			},
 		},
 	}
-	service := NewPodcastService(repo, repo, fetcher, nil)
+	service := NewPodcastService(repo, repo, repo, fetcher, nil)
 
 	podcast, err := service.AddPodcast(ctx, "https://example.com/feed.xml")
 	if err != nil {
@@ -91,6 +91,57 @@ func TestPodcastService_AddPodcastPersistsEpisodes(t *testing.T) {
 	for _, episode := range episodes {
 		if episode.PodcastID != podcast.ID {
 			t.Fatalf("expected podcast ID %d, got %d", podcast.ID, episode.PodcastID)
+		}
+	}
+}
+
+// TestPodcastService_AddPodcastAtomicOnDuplicateFeedURL covers issue #13's
+// AddPodcast atomicity criterion: when the podcast insert collides with an
+// existing feed_url (UNIQUE violation), the whole batch rolls back — no podcast
+// and no partial episodes are committed.
+func TestPodcastService_AddPodcastAtomicOnDuplicateFeedURL(t *testing.T) {
+	ctx := context.Background()
+	repo, err := persistence.NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	// Pre-seed the feed URL so AddPodcast's podcast insert collides.
+	if err := repo.Save(ctx, &domain.Podcast{Title: "Existing", FeedURL: "https://example.com/dup.xml"}); err != nil {
+		t.Fatalf("seed Save failed: %v", err)
+	}
+
+	fetcher := mockFeedParser{
+		podcast: &domain.Podcast{
+			Title:   "Dup",
+			FeedURL: "https://example.com/dup.xml", // collides with the seed row
+		},
+		episodes: []domain.Episode{
+			{Title: "Should Rollback", AudioURL: "https://example.com/rb.mp3"},
+		},
+	}
+	service := NewPodcastService(repo, repo, repo, fetcher, nil)
+
+	if _, err := service.AddPodcast(ctx, "https://example.com/dup.xml"); err == nil {
+		t.Fatal("expected AddPodcast to fail on duplicate feed_url, got nil")
+	}
+
+	// Exactly one podcast (the seed) and zero episodes survive.
+	got, err := repo.FindAll(ctx)
+	if err != nil {
+		t.Fatalf("FindAll failed: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("expected 1 podcast after rollback, got %d", len(got))
+	}
+	for _, p := range got {
+		eps, err := repo.FindEpisodesByPodcastID(ctx, p.ID)
+		if err != nil {
+			t.Fatalf("FindEpisodesByPodcastID failed: %v", err)
+		}
+		if len(eps) != 0 {
+			t.Errorf("expected 0 episodes for podcast %q, got %d", p.Title, len(eps))
 		}
 	}
 }
@@ -118,7 +169,7 @@ func TestPodcastService_ListEpisodes(t *testing.T) {
 		t.Fatalf("SaveEpisode failed: %v", err)
 	}
 
-	service := NewPodcastService(repo, repo, mockFeedParser{}, nil)
+	service := NewPodcastService(repo, repo, repo, mockFeedParser{}, nil)
 
 	episodes, err := service.ListEpisodes(ctx, podcast.ID)
 	if err != nil {
@@ -180,7 +231,7 @@ func TestPodcastService_RefreshPodcastAddsOnlyNewEpisodes(t *testing.T) {
 			},
 		},
 	}
-	service := NewPodcastService(repo, repo, fetcher, nil)
+	service := NewPodcastService(repo, repo, repo, fetcher, nil)
 
 	newCount, err := service.RefreshPodcast(ctx, podcast.ID)
 	if err != nil {
@@ -242,7 +293,7 @@ func TestPodcastService_RefreshAllPodcastsAggregatesResults(t *testing.T) {
 		},
 	}
 
-	service := NewPodcastService(repo, repo, parser, nil)
+	service := NewPodcastService(repo, repo, repo, parser, nil)
 	result, err := service.RefreshAllPodcasts(ctx)
 	if err != nil {
 		t.Fatalf("RefreshAllPodcasts failed: %v", err)

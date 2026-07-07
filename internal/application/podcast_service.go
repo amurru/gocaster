@@ -17,6 +17,7 @@ type FeedParser interface {
 type PodcastService struct {
 	podcasts domain.PodcastRepo
 	episodes domain.EpisodeRepo
+	batch    domain.PodcastBatchRepo
 	fetcher  FeedParser
 	logger   domain.Logger
 }
@@ -40,22 +41,31 @@ type RefreshFailure struct {
 }
 
 // NewPodcastService accepts only the focused repository ports PodcastService
-// uses — podcast and episode persistence (issue #17). The concrete SQLiteRepo
-// satisfies both via the union PodcastRepository. logger defaults to NoopLogger
-// when nil (issue #14).
-func NewPodcastService(podcasts domain.PodcastRepo, episodes domain.EpisodeRepo, fetcher FeedParser, logger domain.Logger) *PodcastService {
+// uses — podcast/episode persistence and the atomic podcast-batch writer
+// (issues #17, #13). The concrete SQLiteRepo satisfies all via the union
+// PodcastRepository. logger defaults to NoopLogger when nil (issue #14).
+func NewPodcastService(
+	podcasts domain.PodcastRepo,
+	episodes domain.EpisodeRepo,
+	batch domain.PodcastBatchRepo,
+	fetcher FeedParser,
+	logger domain.Logger,
+) *PodcastService {
 	if logger == nil {
 		logger = domain.NoopLogger{}
 	}
 	return &PodcastService{
 		podcasts: podcasts,
 		episodes: episodes,
+		batch:    batch,
 		fetcher:  fetcher,
 		logger:   logger,
 	}
 }
 
-// AddPodcast orchestrates fetching metadata and saving to DB
+// AddPodcast orchestrates fetching metadata and saving the podcast together
+// with all of its episodes in a single transaction (issue #13): all-or-nothing,
+// so a mid-loop failure leaves no partial episode set behind.
 func (s *PodcastService) AddPodcast(ctx context.Context, rssUrl string) (*domain.Podcast, error) {
 	// fetch metadata from rss feed
 	podcast, episodes, err := s.fetcher.Parse(ctx, rssUrl)
@@ -63,16 +73,8 @@ func (s *PodcastService) AddPodcast(ctx context.Context, rssUrl string) (*domain
 		return nil, err
 	}
 
-	// save to db
-	if err := s.podcasts.Save(ctx, podcast); err != nil {
+	if err := s.batch.SavePodcastWithEpisodes(ctx, podcast, episodes); err != nil {
 		return nil, err
-	}
-
-	for i := range episodes {
-		episodes[i].PodcastID = podcast.ID
-		if err := s.episodes.SaveEpisode(ctx, &episodes[i]); err != nil {
-			return nil, err
-		}
 	}
 
 	return podcast, nil
@@ -110,24 +112,23 @@ func (s *PodcastService) RefreshPodcast(ctx context.Context, podcastID int64) (i
 		existingUrls[ep.AudioURL] = true
 	}
 
-	newCount := 0
+	var newEpisodes []domain.Episode
 	for i := range fetchedEpisodes {
 		if existingUrls[fetchedEpisodes[i].AudioURL] {
 			continue
 		}
-		fetchedEpisodes[i].PodcastID = podcastID
-		if err := s.episodes.SaveEpisode(ctx, &fetchedEpisodes[i]); err != nil {
-			return newCount, err
-		}
-		newCount++
+		newEpisodes = append(newEpisodes, fetchedEpisodes[i])
 	}
 
+	// Persist the new episodes and the LastUpdated bump in a single transaction
+	// (issue #13): a mid-batch failure rolls back both, so the feed is retried in
+	// full next time rather than leaving a partial set with a stale LastUpdated.
 	podcast.LastUpdated = time.Now()
-	if err := s.podcasts.Save(ctx, podcast); err != nil {
-		return newCount, err
+	if err := s.batch.AppendEpisodesAndTouchPodcast(ctx, podcast, newEpisodes); err != nil {
+		return len(newEpisodes), err
 	}
 
-	return newCount, nil
+	return len(newEpisodes), nil
 }
 
 func (s *PodcastService) RefreshAllPodcasts(ctx context.Context) (RefreshAllResult, error) {

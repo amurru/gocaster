@@ -48,12 +48,37 @@ type DownloadJobRepo interface {
 	DeleteDownloadJob(ctx context.Context, id int64) error
 }
 
-// PodcastRepository is the union of the three focused repository ports. It
-// exists so the concrete SQLiteRepo and the composition root (main.go) can keep
-// depending on a single type while individual services depend only on the
-// narrow port they use (Interface Segregation Principle, issue #17).
+// PodcastBatchRepo groups the cross-aggregate podcast+episode writes that must
+// commit atomically (issue #13). PodcastService uses these in AddPodcast and
+// RefreshPodcast instead of issuing Save + SaveEpisode-loop as independent
+// writes, which left a partial episode set on mid-loop failure.
+type PodcastBatchRepo interface {
+	// SavePodcastWithEpisodes inserts the podcast and every episode in one
+	// transaction: all-or-nothing. On success podcast.ID reflects the newly
+	// assigned row.
+	SavePodcastWithEpisodes(ctx context.Context, podcast *Podcast, episodes []Episode) error
+	// AppendEpisodesAndTouchPodcast inserts the (already-filtered) new episodes
+	// and updates the podcast's LastUpdated in one transaction. A failure mid-batch
+	// rolls back both the episode inserts and the LastUpdated bump.
+	AppendEpisodesAndTouchPodcast(ctx context.Context, podcast *Podcast, newEpisodes []Episode) error
+}
+
+// DownloadCompletionRepo atomically marks an episode downloaded and removes its
+// completed job row (issue #13). Splitting the pair leaves the episode and
+// downloads tables out of sync on a partial failure (downloaded episode with a
+// dangling job, or a deleted job whose episode was never marked).
+type DownloadCompletionRepo interface {
+	CompleteDownload(ctx context.Context, episodeID int64, localPath string, jobID int64) error
+}
+
+// PodcastRepository is the union of the focused repository ports. It exists so
+// the concrete SQLiteRepo and the composition root (main.go) can keep depending
+// on a single type while individual services depend only on the narrow port they
+// use (Interface Segregation Principle, issue #17).
 type PodcastRepository interface {
 	PodcastRepo
 	EpisodeRepo
 	DownloadJobRepo
+	PodcastBatchRepo
+	DownloadCompletionRepo
 }

@@ -90,8 +90,8 @@ func newTestModel(t *testing.T) Model {
 	}
 	t.Cleanup(func() { _ = repo.Close() })
 
-	podcastService := application.NewPodcastService(repo, repo, tuiMockFeedParser{}, nil)
-	downloadService := application.NewDownloadService(repo, repo, repo, "downloads", nil)
+	podcastService := application.NewPodcastService(repo, repo, repo, tuiMockFeedParser{}, nil)
+	downloadService := application.NewDownloadService(repo, repo, repo, repo, "downloads", nil)
 	mockPlayer := &tuiMockPlayer{}
 	playerService := application.NewPlayerService(repo, repo, mockPlayer, nil, nil)
 	settings := Settings{PeriodicSyncMins: 60}
@@ -108,8 +108,8 @@ func newPlayerTestModel(t *testing.T) (Model, *tuiMockPlayer, domain.Podcast, do
 	}
 	t.Cleanup(func() { _ = repo.Close() })
 
-	podcastService := application.NewPodcastService(repo, repo, tuiMockFeedParser{}, nil)
-	downloadService := application.NewDownloadService(repo, repo, repo, "downloads", nil)
+	podcastService := application.NewPodcastService(repo, repo, repo, tuiMockFeedParser{}, nil)
+	downloadService := application.NewDownloadService(repo, repo, repo, repo, "downloads", nil)
 	mockPlayer := &tuiMockPlayer{}
 	playerService := application.NewPlayerService(repo, repo, mockPlayer, nil, nil)
 	settings := Settings{PeriodicSyncMins: 60}
@@ -920,8 +920,8 @@ func TestModelDownloadJobsShowEpisodeTitles(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = repo.Close() })
 
-	podcastService := application.NewPodcastService(repo, repo, tuiMockFeedParser{}, nil)
-	downloadService := application.NewDownloadService(repo, repo, repo, "downloads", nil)
+	podcastService := application.NewPodcastService(repo, repo, repo, tuiMockFeedParser{}, nil)
+	downloadService := application.NewDownloadService(repo, repo, repo, repo, "downloads", nil)
 	playerService := application.NewPlayerService(repo, repo, &tuiMockPlayer{}, nil, nil)
 	model := NewModel(context.Background(), podcastService, downloadService, playerService, Settings{PeriodicSyncMins: 60}, func(Settings) error { return nil }, "")
 

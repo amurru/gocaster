@@ -349,3 +349,260 @@ func TestSQLiteRepo_ForeignKeyPragmaOn(t *testing.T) {
 		t.Errorf("busy_timeout = %d, want 5000", bt)
 	}
 }
+
+// TestSQLiteRepo_RunInTx_CommitsOnSuccess covers issue #13: runInTx commits
+// when fn returns nil, persisting every write inside the transaction.
+func TestSQLiteRepo_RunInTx_CommitsOnSuccess(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteRepo failed: %v", err)
+	}
+	defer repo.Close()
+
+	podcast := &domain.Podcast{Title: "Tx Commit", FeedURL: "https://example.com/commit.xml"}
+	if err := repo.runInTx(ctx, func(tx *sql.Tx) error {
+		return savePodcast(ctx, tx, podcast)
+	}); err != nil {
+		t.Fatalf("runInTx failed: %v", err)
+	}
+
+	if podcast.ID == 0 {
+		t.Fatal("podcast.ID not set after commit")
+	}
+	got, err := repo.FindByID(ctx, podcast.ID)
+	if err != nil {
+		t.Fatalf("FindByID failed: %v", err)
+	}
+	if got.FeedURL != podcast.FeedURL {
+		t.Errorf("FeedURL = %q, want %q", got.FeedURL, podcast.FeedURL)
+	}
+}
+
+// TestSQLiteRepo_RunInTx_RollsBackOnError covers issue #13: when fn returns an
+// error, every write inside the transaction is rolled back. The fn inserts a
+// podcast (ok) then an episode with a bogus podcast_id, which the FK pragma
+// (issue #5) turns into a hard error — proving the preceding podcast insert is
+// undone.
+func TestSQLiteRepo_RunInTx_RollsBackOnError(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteRepo failed: %v", err)
+	}
+	defer repo.Close()
+
+	podcast := &domain.Podcast{Title: "Tx Rollback", FeedURL: "https://example.com/rollback.xml"}
+	err = repo.runInTx(ctx, func(tx *sql.Tx) error {
+		if err := savePodcast(ctx, tx, podcast); err != nil {
+			return err
+		}
+		// Bogus podcast_id triggers a FK violation (foreign_keys = ON, issue #5).
+		orphan := &domain.Episode{PodcastID: 99999, Title: "Orphan", AudioURL: "https://example.com/o.mp3"}
+		return saveEpisode(ctx, tx, orphan)
+	})
+	if err == nil {
+		t.Fatal("expected FK violation error, got nil")
+	}
+
+	if _, err := repo.FindByID(ctx, podcast.ID); err == nil {
+		t.Error("podcast row should not exist after rollback")
+	}
+}
+
+// TestSQLiteRepo_RunInTx_RespectsCancelledContext covers issue #13 acceptance:
+// BeginTx must bind to the caller's context. A pre-cancelled context prevents
+// the transaction from starting and fn never runs.
+func TestSQLiteRepo_RunInTx_RespectsCancelledContext(t *testing.T) {
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteRepo failed: %v", err)
+	}
+	defer repo.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before BeginTx
+
+	ran := false
+	err = repo.runInTx(ctx, func(tx *sql.Tx) error {
+		ran = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected error from BeginTx with cancelled context, got nil")
+	}
+	if ran {
+		t.Error("fn should not run when BeginTx fails")
+	}
+}
+
+// TestSQLiteRepo_SavePodcastWithEpisodes covers issue #13: the podcast and all
+// episodes commit together, with episode.PodcastID linked to the saved podcast.
+func TestSQLiteRepo_SavePodcastWithEpisodes(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteRepo failed: %v", err)
+	}
+	defer repo.Close()
+
+	podcast := &domain.Podcast{Title: "Batch", FeedURL: "https://example.com/batch.xml"}
+	episodes := []domain.Episode{
+		{Title: "E1", AudioURL: "https://example.com/e1.mp3"},
+		{Title: "E2", AudioURL: "https://example.com/e2.mp3"},
+	}
+	if err := repo.SavePodcastWithEpisodes(ctx, podcast, episodes); err != nil {
+		t.Fatalf("SavePodcastWithEpisodes failed: %v", err)
+	}
+
+	if podcast.ID == 0 {
+		t.Fatal("podcast.ID not set")
+	}
+	got, err := repo.FindEpisodesByPodcastID(ctx, podcast.ID)
+	if err != nil {
+		t.Fatalf("FindEpisodesByPodcastID failed: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d episodes, want 2", len(got))
+	}
+	for _, e := range got {
+		if e.PodcastID != podcast.ID {
+			t.Errorf("episode %q PodcastID = %d, want %d", e.Title, e.PodcastID, podcast.ID)
+		}
+	}
+}
+
+// TestSQLiteRepo_SavePodcastWithEpisodes_AtomicOnDuplicateFeedURL covers issue
+// #13's AddPodcast atomicity criterion: a UNIQUE violation on feed_url must
+// roll back the whole batch — no podcast and no episodes committed.
+func TestSQLiteRepo_SavePodcastWithEpisodes_AtomicOnDuplicateFeedURL(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteRepo failed: %v", err)
+	}
+	defer repo.Close()
+
+	// Pre-seed the feed URL so the batch's podcast insert collides.
+	if err := repo.Save(ctx, &domain.Podcast{Title: "Existing", FeedURL: "https://example.com/dup.xml"}); err != nil {
+		t.Fatalf("seed Save failed: %v", err)
+	}
+
+	dup := &domain.Podcast{Title: "Dup", FeedURL: "https://example.com/dup.xml"}
+	episodes := []domain.Episode{
+		{Title: "Should Rollback", AudioURL: "https://example.com/rb.mp3"},
+	}
+	err = repo.SavePodcastWithEpisodes(ctx, dup, episodes)
+	if err == nil {
+		t.Fatal("expected UNIQUE violation on feed_url, got nil")
+	}
+
+	// No partial state: the dup podcast was never committed, and no orphan
+	// episode with its (unassigned) feed survives.
+	got, err := repo.FindAll(ctx)
+	if err != nil {
+		t.Fatalf("FindAll failed: %v", err)
+	}
+	if len(got) != 1 {
+		t.Errorf("expected exactly 1 podcast after rollback, got %d", len(got))
+	}
+	// Confirm no episodes exist at all.
+	rows, err := repo.db.QueryContext(ctx, "SELECT COUNT(*) FROM episodes")
+	if err != nil {
+		t.Fatalf("count episodes failed: %v", err)
+	}
+	defer rows.Close()
+	var n int
+	if !rows.Next() {
+		t.Fatal("no rows from episode count")
+	}
+	if err := rows.Scan(&n); err != nil {
+		t.Fatalf("scan episode count failed: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 episodes after rollback, got %d", n)
+	}
+}
+
+// TestSQLiteRepo_AppendEpisodesAndTouchPodcast covers issue #13: new episodes
+// and the podcast's LastUpdated bump commit together.
+func TestSQLiteRepo_AppendEpisodesAndTouchPodcast(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteRepo failed: %v", err)
+	}
+	defer repo.Close()
+
+	podcast := &domain.Podcast{Title: "Refresh", FeedURL: "https://example.com/refresh.xml"}
+	if err := repo.Save(ctx, podcast); err != nil {
+		t.Fatalf("seed Save failed: %v", err)
+	}
+	before := podcast.LastUpdated
+
+	newEps := []domain.Episode{
+		{Title: "New1", AudioURL: "https://example.com/new1.mp3"},
+		{Title: "New2", AudioURL: "https://example.com/new2.mp3"},
+	}
+	podcast.LastUpdated = before.Add(time.Hour)
+	if err := repo.AppendEpisodesAndTouchPodcast(ctx, podcast, newEps); err != nil {
+		t.Fatalf("AppendEpisodesAndTouchPodcast failed: %v", err)
+	}
+
+	got, err := repo.FindEpisodesByPodcastID(ctx, podcast.ID)
+	if err != nil {
+		t.Fatalf("FindEpisodesByPodcastID failed: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("expected 2 episodes, got %d", len(got))
+	}
+	saved, err := repo.FindByID(ctx, podcast.ID)
+	if err != nil {
+		t.Fatalf("FindByID failed: %v", err)
+	}
+	if !saved.LastUpdated.Equal(podcast.LastUpdated) {
+		t.Errorf("LastUpdated = %v, want %v", saved.LastUpdated, podcast.LastUpdated)
+	}
+}
+
+// TestSQLiteRepo_CompleteDownload covers issue #13: marking an episode
+// downloaded and deleting its job commit together.
+func TestSQLiteRepo_CompleteDownload(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteRepo failed: %v", err)
+	}
+	defer repo.Close()
+
+	podcast := &domain.Podcast{Title: "DL", FeedURL: "https://example.com/dl.xml"}
+	if err := repo.Save(ctx, podcast); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+	episode := &domain.Episode{PodcastID: podcast.ID, Title: "Ep", AudioURL: "https://example.com/dl.mp3"}
+	if err := repo.SaveEpisode(ctx, episode); err != nil {
+		t.Fatalf("SaveEpisode failed: %v", err)
+	}
+	job := &domain.DownloadJob{EpisodeID: episode.ID, Status: domain.DownloadStatusCompleted}
+	if err := repo.SaveDownloadJob(ctx, job); err != nil {
+		t.Fatalf("SaveDownloadJob failed: %v", err)
+	}
+
+	if err := repo.CompleteDownload(ctx, episode.ID, "/audio/ep.mp3", job.ID); err != nil {
+		t.Fatalf("CompleteDownload failed: %v", err)
+	}
+
+	got, err := repo.FindEpisodeByID(ctx, episode.ID)
+	if err != nil {
+		t.Fatalf("FindEpisodeByID failed: %v", err)
+	}
+	if !got.IsDownloaded {
+		t.Error("episode.IsDownloaded = false, want true")
+	}
+	if got.LocalPath != "/audio/ep.mp3" {
+		t.Errorf("LocalPath = %q, want %q", got.LocalPath, "/audio/ep.mp3")
+	}
+	if _, err := repo.FindDownloadJobByID(ctx, job.ID); err == nil {
+		t.Error("download job should have been deleted")
+	}
+}
