@@ -597,9 +597,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		return m, tea.Batch(cmds...)
 	case tea.PasteMsg:
-		// Pass the paste directly to the input component
+		// Route the paste to whichever input is actually focused. Previously
+		// this hardcoded m.input (the add-podcast field), so pasting into the
+		// go-to-episode, seek, or settings inputs silently dropped the paste.
 		var cmd tea.Cmd
-		m.input, cmd = m.input.Update(msg)
+		switch {
+		case m.state == stateAddPodcast:
+			m.input, cmd = m.input.Update(msg)
+		case m.state == stateGoToEpisode:
+			m.goToInput, cmd = m.goToInput.Update(msg)
+		case m.state == statePlayerSeek:
+			m.seekInput, cmd = m.seekInput.Update(msg)
+		case m.state == stateSettings && m.editingInterval:
+			m.intervalInput, cmd = m.intervalInput.Update(msg)
+		case m.state == stateSettings && m.editingDiscordID:
+			m.discordInput, cmd = m.discordInput.Update(msg)
+		}
 		return m, cmd
 	case tea.KeyPressMsg:
 		switch {
