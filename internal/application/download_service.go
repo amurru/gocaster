@@ -38,6 +38,7 @@ type DownloadService struct {
 	jobs        domain.DownloadJobRepo
 	episodes    domain.EpisodeRepo
 	podcasts    domain.PodcastRepo
+	completion  domain.DownloadCompletionRepo
 	http        *http.Client
 	downloadDir string
 	logger      domain.Logger
@@ -57,11 +58,19 @@ type DownloadService struct {
 
 // NewDownloadService accepts only the focused repository ports a download
 // needs: the download-job port (primary), the episode port (for source
-// resolution and MarkEpisodeDownloaded), and the podcast port (only for
-// ListJobsWithEpisodes title enrichment). The concrete SQLiteRepo satisfies all
-// three via the union PodcastRepository (issue #17). logger defaults to
-// NoopLogger when nil (issue #14).
-func NewDownloadService(jobs domain.DownloadJobRepo, episodes domain.EpisodeRepo, podcasts domain.PodcastRepo, downloadDir string, logger domain.Logger) *DownloadService {
+// resolution and MarkEpisodeDownloaded), the podcast port (only for
+// ListJobsWithEpisodes title enrichment), and the atomic completion port (for
+// the mark-downloaded + delete-job transaction, issue #13). The concrete
+// SQLiteRepo satisfies all four via the union PodcastRepository (issue #17).
+// logger defaults to NoopLogger when nil (issue #14).
+func NewDownloadService(
+	jobs domain.DownloadJobRepo,
+	episodes domain.EpisodeRepo,
+	podcasts domain.PodcastRepo,
+	completion domain.DownloadCompletionRepo,
+	downloadDir string,
+	logger domain.Logger,
+) *DownloadService {
 	if logger == nil {
 		logger = domain.NoopLogger{}
 	}
@@ -69,6 +78,7 @@ func NewDownloadService(jobs domain.DownloadJobRepo, episodes domain.EpisodeRepo
 		jobs:        jobs,
 		episodes:    episodes,
 		podcasts:    podcasts,
+		completion:  completion,
 		http:        &http.Client{Transport: downloadTransport},
 		downloadDir: downloadDir,
 		logger:      logger,
@@ -626,13 +636,13 @@ func (s *DownloadService) runDownload(ctx context.Context, cleanup func(), jobID
 		return
 	}
 
-	if err := s.episodes.MarkEpisodeDownloaded(ctx, job.EpisodeID, finalPath); err != nil {
-		s.failJob(ctx, job, fmt.Sprintf("could not mark episode as downloaded: %v", err))
+	// Mark the episode downloaded and delete the completed job atomically so the
+	// episode and downloads tables cannot drift out of sync (issue #13). A delete
+	// failure now rolls back the mark, leaving the job intact for retry rather
+	// than a downloaded episode with a dangling job row.
+	if err := s.completion.CompleteDownload(ctx, job.EpisodeID, finalPath, jobID); err != nil {
+		s.failJob(ctx, job, fmt.Sprintf("could not complete download atomically: %v", err))
 		return
-	}
-
-	if err := s.jobs.DeleteDownloadJob(ctx, jobID); err != nil {
-		s.logger.Warn("could not delete completed job", "job_id", jobID, "err", err)
 	}
 }
 
