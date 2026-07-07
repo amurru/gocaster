@@ -225,7 +225,7 @@ func TestDownloadService_FailurePreservesResumeData(t *testing.T) {
 
 	dir := t.TempDir()
 	repo := newDownloadTestRepo(t, srv.URL+"/ep.mp3")
-	svc := NewDownloadService(repo, dir)
+	svc := NewDownloadService(repo, repo, repo, dir, nil)
 
 	episode, err := repo.FindEpisodeByID(1)
 	if err != nil {
@@ -314,7 +314,7 @@ func TestDownloadService_RetriesResumeFromPartialFile(t *testing.T) {
 
 	dir := t.TempDir()
 	repo := newDownloadTestRepo(t, srv.URL+"/ep.mp3")
-	svc := NewDownloadService(repo, dir)
+	svc := NewDownloadService(repo, repo, repo, dir, nil)
 
 	episode, err := repo.FindEpisodeByID(1)
 	if err != nil {
@@ -410,7 +410,7 @@ func TestDownloadService_ProgressThrottle(t *testing.T) {
 
 	dir := t.TempDir()
 	repo := newDownloadTestRepo(t, srv.URL+"/ep.m4a")
-	svc := NewDownloadService(repo, dir)
+	svc := NewDownloadService(repo, repo, repo, dir, nil)
 
 	episode, err := repo.FindEpisodeByID(1)
 	if err != nil {
@@ -458,7 +458,7 @@ func TestDownloadService_MalformedURLErrors(t *testing.T) {
 	dir := t.TempDir()
 	repo := newDownloadTestRepo(t, "http://[::1]:named") // invalid URL
 
-	svc := NewDownloadService(repo, dir)
+	svc := NewDownloadService(repo, repo, repo, dir, nil)
 	episode, err := repo.FindEpisodeByID(1)
 	if err != nil {
 		t.Fatalf("FindEpisodeByID failed: %v", err)
@@ -479,7 +479,7 @@ func TestDownloadService_MalformedURLErrors(t *testing.T) {
 // transport with response-header timeout configured so a stalled server cannot
 // hang the goroutine indefinitely (issue #6).
 func TestDownloadService_HTTPClientTimeout(t *testing.T) {
-	svc := NewDownloadService(nil, "")
+	svc := NewDownloadService(nil, nil, nil, "", nil)
 	if svc.http == nil {
 		t.Fatal("expected non-nil http client")
 	}
@@ -494,7 +494,7 @@ func TestDownloadService_HTTPClientTimeout(t *testing.T) {
 
 	dir := t.TempDir()
 	repo := newDownloadTestRepo(t, srv.URL+"/ep.mp3")
-	stallSvc := NewDownloadService(repo, dir)
+	stallSvc := NewDownloadService(repo, repo, repo, dir, nil)
 	// Give this service its own isolated transport with a short header timeout
 	// so the test completes quickly without mutating the shared package-level
 	// downloadTransport (which would leak the 200ms timeout into other tests).
@@ -521,7 +521,7 @@ func TestDownloadService_HTTPClientTimeout(t *testing.T) {
 func TestFailJob_PreservesByteCounters(t *testing.T) {
 	repo := newDownloadTestRepo(t, "https://example.com/ep.mp3")
 	dir := t.TempDir()
-	svc := NewDownloadService(repo, dir)
+	svc := NewDownloadService(repo, repo, repo, dir, nil)
 
 	episode, err := repo.FindEpisodeByID(1)
 	if err != nil {

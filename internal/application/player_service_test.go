@@ -109,6 +109,9 @@ func (m *mockPlayer) Close() error {
 	return nil
 }
 
+// mockRepo implements only the focused ports PlayerService consumes —
+// EpisodeRepo and PodcastRepo (issue #17). It no longer stubs the ~9
+// download-job methods the service never calls.
 type mockRepo struct {
 	episodes map[int64]*domain.Episode
 	podcasts map[int64]*domain.Podcast
@@ -135,23 +138,12 @@ func (m *mockRepo) UpdateEpisodePlaybackState(id int64, isPlayed bool) error {
 	return nil
 }
 
-func (m *mockRepo) Save(podcast *domain.Podcast) error                         { return nil }
-func (m *mockRepo) FindAll() ([]domain.Podcast, error)                         { return nil, nil }
-func (m *mockRepo) Delete(id int64) error                                      { return nil }
-func (m *mockRepo) SaveEpisode(episode *domain.Episode) error                  { return nil }
-func (m *mockRepo) FindEpisodesByPodcastID(id int64) ([]domain.Episode, error) { return nil, nil }
-func (m *mockRepo) DeleteEpisode(id int64) error                               { return nil }
-func (m *mockRepo) SaveDownloadJob(job *domain.DownloadJob) error              { return nil }
-func (m *mockRepo) FindDownloadJobByEpisodeID(episodeID int64) (*domain.DownloadJob, error) {
-	return nil, nil
-}
-func (m *mockRepo) FindAllDownloadJobs() ([]domain.DownloadJob, error) { return nil, nil }
-func (m *mockRepo) UpdateDownloadJobStatus(id int64, status domain.DownloadStatus, bytesDownloaded int64, bytesTotal int64, errorMsg string) error {
-	return nil
-}
-func (m *mockRepo) UpdateDownloadJobProgress(job *domain.DownloadJob) error       { return nil }
-func (m *mockRepo) CountNonFailedJobs() (int, error)                              { return 0, nil }
-func (m *mockRepo) DeleteDownloadJob(id int64) error                              { return nil }
+func (m *mockRepo) Save(podcast *domain.Podcast) error                            { return nil }
+func (m *mockRepo) FindAll() ([]domain.Podcast, error)                            { return nil, nil }
+func (m *mockRepo) Delete(id int64) error                                         { return nil }
+func (m *mockRepo) SaveEpisode(episode *domain.Episode) error                     { return nil }
+func (m *mockRepo) FindEpisodesByPodcastID(id int64) ([]domain.Episode, error)    { return nil, nil }
+func (m *mockRepo) DeleteEpisode(id int64) error                                  { return nil }
 func (m *mockRepo) MarkEpisodeDownloaded(episodeID int64, localPath string) error { return nil }
 
 func TestPlayerServiceBroadcastsOnPlay(t *testing.T) {
@@ -166,7 +158,7 @@ func TestPlayerServiceBroadcastsOnPlay(t *testing.T) {
 		},
 	}
 
-	svc := NewPlayerService(mr, mp, mb)
+	svc := NewPlayerService(mr, mr, mp, mb, nil)
 
 	err := svc.PlayEpisode(1)
 	if err != nil {
@@ -191,7 +183,7 @@ func TestPlayerServiceBroadcastsOnPause(t *testing.T) {
 	mb := &mockBroadcaster{}
 	mr := &mockRepo{}
 
-	svc := NewPlayerService(mr, mp, mb)
+	svc := NewPlayerService(mr, mr, mp, mb, nil)
 
 	_ = svc.Pause()
 
@@ -205,7 +197,7 @@ func TestPlayerServiceBroadcastsOnStop(t *testing.T) {
 	mb := &mockBroadcaster{}
 	mr := &mockRepo{}
 
-	svc := NewPlayerService(mr, mp, mb)
+	svc := NewPlayerService(mr, mr, mp, mb, nil)
 
 	_ = svc.StopPlayback()
 
@@ -226,7 +218,7 @@ func TestPlayerServiceReplaysLastEpisode(t *testing.T) {
 		},
 	}
 
-	svc := NewPlayerService(mr, mp, mb)
+	svc := NewPlayerService(mr, mr, mp, mb, nil)
 
 	_ = svc.PlayEpisode(1)
 
@@ -251,7 +243,7 @@ func TestPlayerServiceControllerPlaysLastWhenNonePlayed(t *testing.T) {
 	mb := &mockBroadcaster{}
 	mr := &mockRepo{}
 
-	svc := NewPlayerService(mr, mp, mb)
+	svc := NewPlayerService(mr, mr, mp, mb, nil)
 
 	err := svc.Play(0)
 	if err == nil {
@@ -271,7 +263,7 @@ func TestPlayerServiceInboundControl(t *testing.T) {
 		},
 	}
 
-	svc := NewPlayerService(mr, mp, mb)
+	svc := NewPlayerService(mr, mr, mp, mb, nil)
 	_ = svc
 
 	mb.controller.Play(1)

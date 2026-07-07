@@ -10,20 +10,31 @@ import (
 
 type PlayerService struct {
 	mu          sync.RWMutex
-	repo        domain.PodcastRepository
+	episodes    domain.EpisodeRepo
+	podcasts    domain.PodcastRepo
 	player      domain.Player
 	broadcaster domain.PlaybackBroadcaster
+	logger      domain.Logger
 
 	currentEpisode *domain.Episode
 	currentPodcast *domain.Podcast
 	lastEpisodeID  int64
 }
 
-func NewPlayerService(repo domain.PodcastRepository, player domain.Player, broadcaster domain.PlaybackBroadcaster) *PlayerService {
+// NewPlayerService accepts only the focused repository ports PlayerService
+// uses — episode reads/writes and podcast reads (issue #17). The concrete
+// SQLiteRepo satisfies both via the union PodcastRepository, so the composition
+// root passes the same repo. logger defaults to NoopLogger when nil (issue #14).
+func NewPlayerService(episodes domain.EpisodeRepo, podcasts domain.PodcastRepo, player domain.Player, broadcaster domain.PlaybackBroadcaster, logger domain.Logger) *PlayerService {
+	if logger == nil {
+		logger = domain.NoopLogger{}
+	}
 	svc := &PlayerService{
-		repo:        repo,
+		episodes:    episodes,
+		podcasts:    podcasts,
 		player:      player,
 		broadcaster: broadcaster,
+		logger:      logger,
 	}
 
 	if broadcaster != nil {
@@ -34,12 +45,12 @@ func NewPlayerService(repo domain.PodcastRepository, player domain.Player, broad
 }
 
 func (s *PlayerService) PlayEpisode(episodeID int64) error {
-	episode, err := s.repo.FindEpisodeByID(episodeID)
+	episode, err := s.episodes.FindEpisodeByID(episodeID)
 	if err != nil {
 		return fmt.Errorf("could not find episode: %w", err)
 	}
 
-	podcast, err := s.repo.FindByID(episode.PodcastID)
+	podcast, err := s.podcasts.FindByID(episode.PodcastID)
 	if err != nil {
 		return fmt.Errorf("could not find podcast: %w", err)
 	}
@@ -60,8 +71,8 @@ func (s *PlayerService) PlayEpisode(episodeID int64) error {
 
 	if !episode.IsPlayed {
 		episode.IsPlayed = true
-		if err := s.repo.UpdateEpisodePlaybackState(episode.ID, true); err != nil {
-			fmt.Printf("Warning: failed to mark episode as played: %v\n", err)
+		if err := s.episodes.UpdateEpisodePlaybackState(episode.ID, true); err != nil {
+			s.logger.Warn("failed to mark episode as played", "episode_id", episode.ID, "err", err)
 		}
 	}
 	return nil

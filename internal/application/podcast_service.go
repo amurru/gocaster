@@ -11,8 +11,10 @@ type FeedParser interface {
 }
 
 type PodcastService struct {
-	repo    domain.PodcastRepository
-	fetcher FeedParser
+	podcasts domain.PodcastRepo
+	episodes domain.EpisodeRepo
+	fetcher  FeedParser
+	logger   domain.Logger
 }
 
 type RefreshAllResult struct {
@@ -33,10 +35,19 @@ type RefreshFailure struct {
 	Err       error
 }
 
-func NewPodcastService(repo domain.PodcastRepository, fetcher FeedParser) *PodcastService {
+// NewPodcastService accepts only the focused repository ports PodcastService
+// uses — podcast and episode persistence (issue #17). The concrete SQLiteRepo
+// satisfies both via the union PodcastRepository. logger defaults to NoopLogger
+// when nil (issue #14).
+func NewPodcastService(podcasts domain.PodcastRepo, episodes domain.EpisodeRepo, fetcher FeedParser, logger domain.Logger) *PodcastService {
+	if logger == nil {
+		logger = domain.NoopLogger{}
+	}
 	return &PodcastService{
-		repo:    repo,
-		fetcher: fetcher,
+		podcasts: podcasts,
+		episodes: episodes,
+		fetcher:  fetcher,
+		logger:   logger,
 	}
 }
 
@@ -49,13 +60,13 @@ func (s *PodcastService) AddPodcast(rssUrl string) (*domain.Podcast, error) {
 	}
 
 	// save to db
-	if err := s.repo.Save(podcast); err != nil {
+	if err := s.podcasts.Save(podcast); err != nil {
 		return nil, err
 	}
 
 	for i := range episodes {
 		episodes[i].PodcastID = podcast.ID
-		if err := s.repo.SaveEpisode(&episodes[i]); err != nil {
+		if err := s.episodes.SaveEpisode(&episodes[i]); err != nil {
 			return nil, err
 		}
 	}
@@ -64,19 +75,19 @@ func (s *PodcastService) AddPodcast(rssUrl string) (*domain.Podcast, error) {
 }
 
 func (s *PodcastService) ListPodcasts() ([]domain.Podcast, error) {
-	return s.repo.FindAll()
+	return s.podcasts.FindAll()
 }
 
 func (s *PodcastService) GetPodcast(id int64) (*domain.Podcast, error) {
-	return s.repo.FindByID(id)
+	return s.podcasts.FindByID(id)
 }
 
 func (s *PodcastService) ListEpisodes(podcastID int64) ([]domain.Episode, error) {
-	return s.repo.FindEpisodesByPodcastID(podcastID)
+	return s.episodes.FindEpisodesByPodcastID(podcastID)
 }
 
 func (s *PodcastService) RefreshPodcast(podcastID int64) (int, error) {
-	podcast, err := s.repo.FindByID(podcastID)
+	podcast, err := s.podcasts.FindByID(podcastID)
 	if err != nil {
 		return 0, err
 	}
@@ -86,7 +97,7 @@ func (s *PodcastService) RefreshPodcast(podcastID int64) (int, error) {
 		return 0, err
 	}
 
-	existingEpisodes, err := s.repo.FindEpisodesByPodcastID(podcastID)
+	existingEpisodes, err := s.episodes.FindEpisodesByPodcastID(podcastID)
 	if err != nil {
 		return 0, err
 	}
@@ -101,14 +112,14 @@ func (s *PodcastService) RefreshPodcast(podcastID int64) (int, error) {
 			continue
 		}
 		fetchedEpisodes[i].PodcastID = podcastID
-		if err := s.repo.SaveEpisode(&fetchedEpisodes[i]); err != nil {
+		if err := s.episodes.SaveEpisode(&fetchedEpisodes[i]); err != nil {
 			return newCount, err
 		}
 		newCount++
 	}
 
 	podcast.LastUpdated = time.Now()
-	if err := s.repo.Save(podcast); err != nil {
+	if err := s.podcasts.Save(podcast); err != nil {
 		return newCount, err
 	}
 
@@ -118,7 +129,7 @@ func (s *PodcastService) RefreshPodcast(podcastID int64) (int, error) {
 func (s *PodcastService) RefreshAllPodcasts() (RefreshAllResult, error) {
 	var result RefreshAllResult
 
-	podcasts, err := s.repo.FindAll()
+	podcasts, err := s.podcasts.FindAll()
 	if err != nil {
 		return result, err
 	}

@@ -66,7 +66,7 @@ func TestPodcastService_AddPodcastPersistsEpisodes(t *testing.T) {
 			},
 		},
 	}
-	service := NewPodcastService(repo, fetcher)
+	service := NewPodcastService(repo, repo, fetcher, nil)
 
 	podcast, err := service.AddPodcast("https://example.com/feed.xml")
 	if err != nil {
@@ -115,7 +115,7 @@ func TestPodcastService_ListEpisodes(t *testing.T) {
 		t.Fatalf("SaveEpisode failed: %v", err)
 	}
 
-	service := NewPodcastService(repo, mockFeedParser{})
+	service := NewPodcastService(repo, repo, mockFeedParser{}, nil)
 
 	episodes, err := service.ListEpisodes(podcast.ID)
 	if err != nil {
@@ -176,7 +176,7 @@ func TestPodcastService_RefreshPodcastAddsOnlyNewEpisodes(t *testing.T) {
 			},
 		},
 	}
-	service := NewPodcastService(repo, fetcher)
+	service := NewPodcastService(repo, repo, fetcher, nil)
 
 	newCount, err := service.RefreshPodcast(podcast.ID)
 	if err != nil {
@@ -237,7 +237,7 @@ func TestPodcastService_RefreshAllPodcastsAggregatesResults(t *testing.T) {
 		},
 	}
 
-	service := NewPodcastService(repo, parser)
+	service := NewPodcastService(repo, repo, parser, nil)
 	result, err := service.RefreshAllPodcasts()
 	if err != nil {
 		t.Fatalf("RefreshAllPodcasts failed: %v", err)
