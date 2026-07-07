@@ -3,6 +3,7 @@
 package system
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -160,6 +161,19 @@ func (b *mprisBroadcaster) setup() error {
 func (b *mprisBroadcaster) positionUpdater() {
 	defer b.wg.Done()
 
+	// Derive a single context cancelled when the done channel closes (shutdown).
+	// It is passed into the per-tick controller/broadcaster calls so they are
+	// cancellable the same way as TUI-initiated calls (issue #11).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		select {
+		case <-b.done:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
 	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
@@ -185,20 +199,21 @@ func (b *mprisBroadcaster) positionUpdater() {
 			continue
 		}
 
-		status, err := ctrl.Status()
+		status, err := ctrl.Status(ctx)
 		if err == nil {
-			_ = b.PublishPosition(status.PositionSec, status.DurationSec)
+			_ = b.PublishPosition(ctx, status.PositionSec, status.DurationSec)
 		}
 	}
 }
 
-func (b *mprisBroadcaster) SetController(controller domain.PlaybackController) {
+func (b *mprisBroadcaster) SetController(ctx context.Context, controller domain.PlaybackController) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.controller = controller
 }
 
 func (b *mprisBroadcaster) PublishState(
+	ctx context.Context,
 	state domain.PlaybackState,
 	metadata domain.PlaybackMetadata,
 ) error {
@@ -260,7 +275,7 @@ func (b *mprisBroadcaster) buildMetadata(m domain.PlaybackMetadata) map[string]d
 	return meta
 }
 
-func (b *mprisBroadcaster) PublishPosition(positionSec float64, durationSec float64) error {
+func (b *mprisBroadcaster) PublishPosition(ctx context.Context, positionSec float64, durationSec float64) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -284,7 +299,12 @@ func (b *mprisBroadcaster) PublishPosition(positionSec float64, durationSec floa
 	return nil
 }
 
-func (b *mprisBroadcaster) Close() error {
+func (b *mprisBroadcaster) Close(ctx context.Context) error {
+	// Shutdown is unconditional: a cancelled context must not skip the
+	// positionUpdater teardown and conn release, otherwise the DBus name leaks
+	// and the updater can Emit on a closed connection. ctx is kept for
+	// interface conformance and future tracing (issue #11).
+	_ = ctx
 	// Signal positionUpdater to stop and wait for it to fully exit before
 	// closing the connection. Without the WaitGroup, Close() could return and
 	// close *dbus.Conn while the updater was mid-Emit (issue #9 shutdown race).
@@ -383,15 +403,19 @@ func (b *mprisBroadcaster) Play() *dbus.Error {
 	b.mu.Unlock()
 
 	if ctrl != nil {
-		status, err := ctrl.Status()
+		// D-Bus method calls are externally triggered (media keys); they have
+		// no caller context, so they run under a background context bounded
+		// only by the broadcaster's lifetime (issue #11).
+		ctx := context.Background()
+		status, err := ctrl.Status(ctx)
 		if err == nil && status.State == domain.PlaybackStatePaused {
-			if err := ctrl.Resume(); err != nil {
+			if err := ctrl.Resume(ctx); err != nil {
 				return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
 			}
 			return nil
 		}
 
-		if err := ctrl.Play(0); err != nil {
+		if err := ctrl.Play(ctx, 0); err != nil {
 			return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
 		}
 	}
@@ -403,7 +427,7 @@ func (b *mprisBroadcaster) Pause() *dbus.Error {
 	ctrl := b.controller
 	b.mu.Unlock()
 	if ctrl != nil {
-		if err := ctrl.Pause(); err != nil {
+		if err := ctrl.Pause(context.Background()); err != nil {
 			return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
 		}
 	}
@@ -415,7 +439,7 @@ func (b *mprisBroadcaster) PlayPause() *dbus.Error {
 	ctrl := b.controller
 	b.mu.Unlock()
 	if ctrl != nil {
-		if err := ctrl.PlayPause(); err != nil {
+		if err := ctrl.PlayPause(context.Background()); err != nil {
 			return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
 		}
 	}
@@ -427,7 +451,7 @@ func (b *mprisBroadcaster) Stop() *dbus.Error {
 	ctrl := b.controller
 	b.mu.Unlock()
 	if ctrl != nil {
-		if err := ctrl.Stop(); err != nil {
+		if err := ctrl.Stop(context.Background()); err != nil {
 			return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
 		}
 	}
@@ -440,7 +464,7 @@ func (b *mprisBroadcaster) Seek(to int64) (int64, *dbus.Error) {
 	b.mu.Unlock()
 	if ctrl != nil {
 		positionSec := float64(to) / 1e6
-		if err := ctrl.SeekTo(positionSec); err != nil {
+		if err := ctrl.SeekTo(context.Background(), positionSec); err != nil {
 			return 0, dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
 		}
 	}

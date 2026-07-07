@@ -1,44 +1,51 @@
 package domain
 
-// PodcastRepo is the persistence port for podcast aggregates (issue #17).
+import "context"
+
+// PodcastRepo is the persistence port for podcast aggregates (issue #17). Every
+// method takes a context.Context as its first parameter so callers can cancel
+// in-flight operations, set deadlines, and propagate request-scoped tracing
+// (issue #11).
 type PodcastRepo interface {
-	Save(podcast *Podcast) error
-	FindAll() ([]Podcast, error)
-	FindByID(id int64) (*Podcast, error)
-	Delete(id int64) error
+	Save(ctx context.Context, podcast *Podcast) error
+	FindAll(ctx context.Context) ([]Podcast, error)
+	FindByID(ctx context.Context, id int64) (*Podcast, error)
+	Delete(ctx context.Context, id int64) error
 }
 
 // EpisodeRepo is the persistence port for episodes and the cross-concern of
-// marking an episode downloaded on job completion (issue #17).
+// marking an episode downloaded on job completion (issue #17). Every method
+// takes a context.Context (issue #11).
 type EpisodeRepo interface {
-	SaveEpisode(episode *Episode) error
-	FindEpisodesByPodcastID(id int64) ([]Episode, error)
-	FindEpisodeByID(id int64) (*Episode, error)
-	UpdateEpisodePlaybackState(id int64, isPlayed bool) error
-	DeleteEpisode(id int64) error
+	SaveEpisode(ctx context.Context, episode *Episode) error
+	FindEpisodesByPodcastID(ctx context.Context, id int64) ([]Episode, error)
+	FindEpisodeByID(ctx context.Context, id int64) (*Episode, error)
+	UpdateEpisodePlaybackState(ctx context.Context, id int64, isPlayed bool) error
+	DeleteEpisode(ctx context.Context, id int64) error
 
 	// Mark episode as downloaded (called on job completion).
-	MarkEpisodeDownloaded(episodeID int64, localPath string) error
+	MarkEpisodeDownloaded(ctx context.Context, episodeID int64, localPath string) error
 }
 
-// DownloadJobRepo is the persistence port for download jobs (issue #17).
+// DownloadJobRepo is the persistence port for download jobs (issue #17). Every
+// method takes a context.Context (issue #11).
 type DownloadJobRepo interface {
-	SaveDownloadJob(job *DownloadJob) error
+	SaveDownloadJob(ctx context.Context, job *DownloadJob) error
 	// FindDownloadJobByID loads a single job by primary key, replacing the
 	// previous O(N) FindAllDownloadJobs scan that DownloadService ran on every
 	// status update.
-	FindDownloadJobByID(id int64) (*DownloadJob, error)
-	FindDownloadJobByEpisodeID(episodeID int64) (*DownloadJob, error)
-	FindAllDownloadJobs() ([]DownloadJob, error)
-	UpdateDownloadJobStatus(id int64, status DownloadStatus, bytesDownloaded int64, bytesTotal int64, errorMsg string) error
+	FindDownloadJobByID(ctx context.Context, id int64) (*DownloadJob, error)
+	FindDownloadJobByEpisodeID(ctx context.Context, episodeID int64) (*DownloadJob, error)
+	FindAllDownloadJobs(ctx context.Context) ([]DownloadJob, error)
+	UpdateDownloadJobStatus(ctx context.Context, id int64, status DownloadStatus, bytesDownloaded int64, bytesTotal int64, errorMsg string) error
 	// UpdateDownloadJobProgress persists the resume-relevant fields of a job
 	// (bytes counters, temp/final paths, ETag, Last-Modified, SupportsResume)
 	// without changing its status. runDownload calls this once it has learned
 	// from the response headers whether the server supports range requests, so
 	// a later retry can resume from the partial .part file.
-	UpdateDownloadJobProgress(job *DownloadJob) error
-	CountNonFailedJobs() (int, error)
-	DeleteDownloadJob(id int64) error
+	UpdateDownloadJobProgress(ctx context.Context, job *DownloadJob) error
+	CountNonFailedJobs(ctx context.Context) (int, error)
+	DeleteDownloadJob(ctx context.Context, id int64) error
 }
 
 // PodcastRepository is the union of the three focused repository ports. It

@@ -1,6 +1,7 @@
 package application
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/amurru/gocaster/internal/domain"
@@ -39,6 +41,18 @@ type DownloadService struct {
 	http        *http.Client
 	downloadDir string
 	logger      domain.Logger
+
+	// rootCtx is the parent of every per-job context. It is cancelled on
+	// shutdown, which cancels every in-flight runDownload goroutine (issue #11).
+	// It defaults to context.Background() until SetRootContext is called by the
+	// composition root.
+	rootCtx context.Context
+
+	// mu guards cancels. cancels maps a job ID to the cancel entry of its
+	// per-job context, so Shutdown/StopJob can cancel a specific download and
+	// runDownload can remove its own entry when it exits (issue #11).
+	mu      sync.Mutex
+	cancels map[int64]*cancelEntry
 }
 
 // NewDownloadService accepts only the focused repository ports a download
@@ -52,19 +66,101 @@ func NewDownloadService(jobs domain.DownloadJobRepo, episodes domain.EpisodeRepo
 		logger = domain.NoopLogger{}
 	}
 	return &DownloadService{
-		jobs:     jobs,
-		episodes: episodes,
-		podcasts: podcasts,
-		http: &http.Client{
-			Transport: downloadTransport,
-		},
+		jobs:        jobs,
+		episodes:    episodes,
+		podcasts:    podcasts,
+		http:        &http.Client{Transport: downloadTransport},
 		downloadDir: downloadDir,
 		logger:      logger,
+		rootCtx:     context.Background(),
+		cancels:     make(map[int64]*cancelEntry),
 	}
 }
 
-func (s *DownloadService) QueueEpisodeDownload(episodeID int64) error {
-	episode, err := s.episodes.FindEpisodeByID(episodeID)
+// SetRootContext installs the context that parents every per-job context. The
+// composition root calls this with the application's root context so that
+// cancelling it (on shutdown) cancels every in-flight download (issue #11).
+// It must be called before any job starts.
+func (s *DownloadService) SetRootContext(ctx context.Context) {
+	s.mu.Lock()
+	s.rootCtx = ctx
+	s.mu.Unlock()
+}
+
+// jobContext derives a per-job context from the root, records its cancel func
+// so StopJob/Shutdown can cancel it, and returns the context plus a cleanup
+// function the caller defers to remove the entry once runDownload exits
+// (issue #11).
+func (s *DownloadService) jobContext(jobID int64) (context.Context, func()) {
+	s.mu.Lock()
+	parent := s.rootCtx
+	s.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(parent)
+
+	// Wrap cancel in a pointer-typed entry so it can be compared for identity
+	// (Go funcs are not comparable, but pointers are). This lets cleanup tell
+	// whether the map still points at THIS attempt after a concurrent retry.
+	entry := &cancelEntry{cancel: cancel}
+
+	s.mu.Lock()
+	// If a previous attempt's cancel is still registered (e.g. retry racing
+	// with completion), cancel it before overwriting to avoid a leak.
+	if prev, ok := s.cancels[jobID]; ok {
+		prev.cancel()
+	}
+	s.cancels[jobID] = entry
+	s.mu.Unlock()
+
+	cleanup := func() {
+		cancel()
+		s.mu.Lock()
+		// Only delete if the map still points at this attempt; a retry that
+		// started after we began exiting would have overwritten the entry, and
+		// removing its cancel here would break its cancellation.
+		if cur, ok := s.cancels[jobID]; ok && cur == entry {
+			delete(s.cancels, jobID)
+		}
+		s.mu.Unlock()
+	}
+	return ctx, cleanup
+}
+
+// cancelEntry is a small wrapper that makes a cancel func uniquely
+// identifiable (Go funcs are not comparable, so they cannot be tested for
+// equality against a stored func; a pointer-typed wrapper can).
+type cancelEntry struct {
+	cancel context.CancelFunc
+}
+
+// StopJob cancels a specific in-flight download's context. The goroutine will
+// observe the cancellation on its next read and fail the job with the partial
+// bytes preserved (issue #11). It is a no-op if the job is not currently
+// running.
+func (s *DownloadService) StopJob(jobID int64) {
+	s.mu.Lock()
+	if entry, ok := s.cancels[jobID]; ok {
+		entry.cancel()
+	}
+	s.mu.Unlock()
+}
+
+// Shutdown cancels every in-flight download context. It is called by the
+// composition root on exit so download goroutines do not outlive the process or
+// touch a closed DB (issue #11). It is safe to call concurrently with job
+// start/stop.
+func (s *DownloadService) Shutdown(ctx context.Context) error {
+	s.mu.Lock()
+	for jobID, entry := range s.cancels {
+		entry.cancel()
+		delete(s.cancels, jobID)
+	}
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *DownloadService) QueueEpisodeDownload(ctx context.Context, episodeID int64) error {
+	episode, err := s.episodes.FindEpisodeByID(ctx, episodeID)
 	if err != nil {
 		return fmt.Errorf("could not find episode: %w", err)
 	}
@@ -73,25 +169,25 @@ func (s *DownloadService) QueueEpisodeDownload(episodeID int64) error {
 		return fmt.Errorf("episode already downloaded")
 	}
 
-	existingJob, err := s.jobs.FindDownloadJobByEpisodeID(episodeID)
+	existingJob, err := s.jobs.FindDownloadJobByEpisodeID(ctx, episodeID)
 	if err == nil && existingJob != nil {
 		if existingJob.Status == domain.DownloadStatusDownloading ||
 			existingJob.Status == domain.DownloadStatusQueued {
 			return fmt.Errorf("episode already in queue")
 		}
 		if existingJob.Status == domain.DownloadStatusFailed {
-			return s.retryOrQueue(episodeID, true)
+			return s.retryOrQueue(ctx, episodeID, true)
 		}
 		if existingJob.Status == domain.DownloadStatusPaused {
-			return s.ResumeJob(existingJob.ID)
+			return s.ResumeJob(ctx, existingJob.ID)
 		}
 	}
 
-	return s.retryOrQueue(episodeID, false)
+	return s.retryOrQueue(ctx, episodeID, false)
 }
 
-func (s *DownloadService) retryOrQueue(episodeID int64, isRetry bool) error {
-	nonFailedCount, err := s.jobs.CountNonFailedJobs()
+func (s *DownloadService) retryOrQueue(ctx context.Context, episodeID int64, isRetry bool) error {
+	nonFailedCount, err := s.jobs.CountNonFailedJobs(ctx)
 	if err != nil {
 		return fmt.Errorf("could not count jobs: %w", err)
 	}
@@ -101,19 +197,19 @@ func (s *DownloadService) retryOrQueue(episodeID int64, isRetry bool) error {
 		Status:    domain.DownloadStatusQueued,
 	}
 
-	if err := s.jobs.SaveDownloadJob(job); err != nil {
+	if err := s.jobs.SaveDownloadJob(ctx, job); err != nil {
 		return fmt.Errorf("could not queue job: %w", err)
 	}
 
 	if nonFailedCount == 0 && !isRetry {
-		return s.StartJob(job.ID)
+		return s.StartJob(ctx, job.ID)
 	}
 
 	return nil
 }
 
-func (s *DownloadService) StartJob(jobID int64) error {
-	job, err := s.jobs.FindDownloadJobByID(jobID)
+func (s *DownloadService) StartJob(ctx context.Context, jobID int64) error {
+	job, err := s.jobs.FindDownloadJobByID(ctx, jobID)
 	if err != nil {
 		return err
 	}
@@ -124,6 +220,7 @@ func (s *DownloadService) StartJob(jobID int64) error {
 	}
 
 	if err := s.jobs.UpdateDownloadJobStatus(
+		ctx,
 		jobID,
 		domain.DownloadStatusDownloading,
 		job.BytesDownloaded,
@@ -133,13 +230,17 @@ func (s *DownloadService) StartJob(jobID int64) error {
 		return fmt.Errorf("could not start job: %w", err)
 	}
 
+	// Spawn the worker. runDownload derives its own per-job context from the
+	// service root (NOT the caller's ctx, which dies as soon as the tea.Cmd
+	// closure returns), so the download outlives the request and stays
+	// cancellable via StopJob/Shutdown (issue #11).
 	go s.runDownload(jobID)
 
 	return nil
 }
 
-func (s *DownloadService) ResumeJob(jobID int64) error {
-	job, err := s.jobs.FindDownloadJobByID(jobID)
+func (s *DownloadService) ResumeJob(ctx context.Context, jobID int64) error {
+	job, err := s.jobs.FindDownloadJobByID(ctx, jobID)
 	if err != nil {
 		return err
 	}
@@ -150,6 +251,7 @@ func (s *DownloadService) ResumeJob(jobID int64) error {
 
 	job.Status = domain.DownloadStatusQueued
 	if err := s.jobs.UpdateDownloadJobStatus(
+		ctx,
 		jobID,
 		domain.DownloadStatusDownloading,
 		job.BytesDownloaded,
@@ -164,8 +266,8 @@ func (s *DownloadService) ResumeJob(jobID int64) error {
 	return nil
 }
 
-func (s *DownloadService) RetryJob(jobID int64) error {
-	job, err := s.jobs.FindDownloadJobByID(jobID)
+func (s *DownloadService) RetryJob(ctx context.Context, jobID int64) error {
+	job, err := s.jobs.FindDownloadJobByID(ctx, jobID)
 	if err != nil {
 		return err
 	}
@@ -182,6 +284,7 @@ func (s *DownloadService) RetryJob(jobID int64) error {
 	job.ErrorMessage = ""
 
 	if err := s.jobs.UpdateDownloadJobStatus(
+		ctx,
 		jobID,
 		domain.DownloadStatusDownloading,
 		job.BytesDownloaded,
@@ -196,8 +299,8 @@ func (s *DownloadService) RetryJob(jobID int64) error {
 	return nil
 }
 
-func (s *DownloadService) ListJobs() ([]domain.DownloadJob, error) {
-	return s.jobs.FindAllDownloadJobs()
+func (s *DownloadService) ListJobs(ctx context.Context) ([]domain.DownloadJob, error) {
+	return s.jobs.FindAllDownloadJobs(ctx)
 }
 
 // DownloadJobView pairs a DownloadJob with its resolved episode/podcast titles
@@ -213,17 +316,17 @@ type DownloadJobView struct {
 // ListJobsWithEpisodes returns all download jobs enriched with the episode and
 // podcast titles resolved via the repository. Jobs whose episode is missing
 // (e.g. cascade-deleted) get an empty title rather than failing the whole call.
-func (s *DownloadService) ListJobsWithEpisodes() ([]DownloadJobView, error) {
-	jobs, err := s.jobs.FindAllDownloadJobs()
+func (s *DownloadService) ListJobsWithEpisodes(ctx context.Context) ([]DownloadJobView, error) {
+	jobs, err := s.jobs.FindAllDownloadJobs(ctx)
 	if err != nil {
 		return nil, err
 	}
 	views := make([]DownloadJobView, 0, len(jobs))
 	for _, job := range jobs {
 		view := DownloadJobView{DownloadJob: job}
-		if ep, err := s.episodes.FindEpisodeByID(job.EpisodeID); err == nil && ep != nil {
+		if ep, err := s.episodes.FindEpisodeByID(ctx, job.EpisodeID); err == nil && ep != nil {
 			view.EpisodeTitle = ep.Title
-			if p, err := s.podcasts.FindByID(ep.PodcastID); err == nil && p != nil {
+			if p, err := s.podcasts.FindByID(ctx, ep.PodcastID); err == nil && p != nil {
 				view.PodcastTitle = p.Title
 			}
 		}
@@ -233,14 +336,31 @@ func (s *DownloadService) ListJobsWithEpisodes() ([]DownloadJobView, error) {
 }
 
 func (s *DownloadService) runDownload(jobID int64) {
-	job, err := s.jobs.FindDownloadJobByID(jobID)
+	// Derive a per-job context from the service root. It is cancelled by
+	// StopJob/Shutdown (issue #11); runDownload observes it at every blocking
+	// point (DB lookups, the HTTP request, each body Read) and fails the job
+	// cleanly on cancellation. The cleanup func unregisters the cancel entry
+	// when runDownload exits so a later retry can re-register a fresh one.
+	ctx, cleanup := s.jobContext(jobID)
+	defer cleanup()
+
+	if err := ctx.Err(); err != nil {
+		// Root already cancelled (e.g. shutdown racing with start): leave the
+		// job in Downloading so the next launch can resume it, rather than
+		// attempting a DB write that would itself fail under the cancelled
+		// context (issue #11).
+		s.logger.Debug("download skipped: context cancelled before start", "job_id", jobID, "err", err)
+		return
+	}
+
+	job, err := s.jobs.FindDownloadJobByID(ctx, jobID)
 	if err != nil {
 		return
 	}
 
-	episode, err := s.episodes.FindEpisodeByID(job.EpisodeID)
+	episode, err := s.episodes.FindEpisodeByID(ctx, job.EpisodeID)
 	if err != nil || episode == nil {
-		s.failJob(job, fmt.Sprintf("could not find episode: %v", err))
+		s.failJob(ctx, job, fmt.Sprintf("could not find episode: %v", err))
 		return
 	}
 
@@ -264,7 +384,7 @@ func (s *DownloadService) runDownload(jobID int64) {
 			file, err = os.Create(partPath)
 		}
 		if err != nil {
-			s.failJob(job, fmt.Sprintf("could not create file: %v", err))
+			s.failJob(ctx, job, fmt.Sprintf("could not create file: %v", err))
 			return
 		}
 	}
@@ -275,42 +395,42 @@ func (s *DownloadService) runDownload(jobID int64) {
 
 	if job.BytesDownloaded > 0 && job.SupportsResume {
 		if _, err := file.Seek(0, io.SeekEnd); err != nil {
-			s.failJob(job, fmt.Sprintf("could not seek resume position: %v", err))
+			s.failJob(ctx, job, fmt.Sprintf("could not seek resume position: %v", err))
 			return
 		}
 		info, err := file.Stat()
 		if err != nil {
-			s.failJob(job, fmt.Sprintf("could not stat partial file: %v", err))
+			s.failJob(ctx, job, fmt.Sprintf("could not stat partial file: %v", err))
 			return
 		}
 		resumeOffset := info.Size()
 
-		req, err = http.NewRequest("GET", url, nil)
+		req, err = http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
-			s.failJob(job, fmt.Sprintf("could not build resume request: %v", err))
+			s.failJob(ctx, job, fmt.Sprintf("could not build resume request: %v", err))
 			return
 		}
 		req.Header.Add("Range", fmt.Sprintf("bytes=%d-", resumeOffset))
 		requestedRange = true
 	} else {
 		if err := file.Truncate(0); err != nil {
-			s.failJob(job, fmt.Sprintf("could not reset partial file: %v", err))
+			s.failJob(ctx, job, fmt.Sprintf("could not reset partial file: %v", err))
 			return
 		}
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			s.failJob(job, fmt.Sprintf("could not reset write position: %v", err))
+			s.failJob(ctx, job, fmt.Sprintf("could not reset write position: %v", err))
 			return
 		}
-		req, err = http.NewRequest("GET", url, nil)
+		req, err = http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
-			s.failJob(job, fmt.Sprintf("could not build request: %v", err))
+			s.failJob(ctx, job, fmt.Sprintf("could not build request: %v", err))
 			return
 		}
 	}
 
 	resp, err := s.http.Do(req)
 	if err != nil {
-		s.failJob(job, fmt.Sprintf("request failed: %v", err))
+		s.failJob(ctx, job, fmt.Sprintf("request failed: %v", err))
 		return
 	}
 	defer resp.Body.Close()
@@ -320,33 +440,34 @@ func (s *DownloadService) runDownload(jobID int64) {
 		// a prior Seek(0, SeekEnd) in the resume branch left at resumeOffset.
 		// Reset both to avoid writing a sparse/corrupt file.
 		if err := file.Truncate(0); err != nil {
-			s.failJob(job, fmt.Sprintf("could not reset partial file: %v", err))
+			s.failJob(ctx, job, fmt.Sprintf("could not reset partial file: %v", err))
 			return
 		}
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			s.failJob(job, fmt.Sprintf("could not reset write position: %v", err))
+			s.failJob(ctx, job, fmt.Sprintf("could not reset write position: %v", err))
 			return
 		}
 		job.BytesDownloaded = 0
 		if err := s.jobs.UpdateDownloadJobStatus(
+			ctx,
 			jobID,
 			domain.DownloadStatusDownloading,
 			0,
 			job.BytesTotal,
 			"",
 		); err != nil {
-			s.failJob(job, fmt.Sprintf("could not update job status: %v", err))
+			s.failJob(ctx, job, fmt.Sprintf("could not update job status: %v", err))
 			return
 		}
 
-		req2, err := http.NewRequest("GET", url, nil)
+		req2, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
-			s.failJob(job, fmt.Sprintf("could not rebuild request: %v", err))
+			s.failJob(ctx, job, fmt.Sprintf("could not rebuild request: %v", err))
 			return
 		}
 		resp2, err := s.http.Do(req2)
 		if err != nil {
-			s.failJob(job, fmt.Sprintf("request failed: %v", err))
+			s.failJob(ctx, job, fmt.Sprintf("request failed: %v", err))
 			return
 		}
 		defer resp2.Body.Close()
@@ -354,7 +475,7 @@ func (s *DownloadService) runDownload(jobID int64) {
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
-		s.failJob(job, fmt.Sprintf("server returned: %s", resp.Status))
+		s.failJob(ctx, job, fmt.Sprintf("server returned: %s", resp.Status))
 		return
 	}
 
@@ -364,11 +485,11 @@ func (s *DownloadService) runDownload(jobID int64) {
 	// and the counters so the body is written from offset 0.
 	if requestedRange && resp.StatusCode == http.StatusOK {
 		if err := file.Truncate(0); err != nil {
-			s.failJob(job, fmt.Sprintf("could not reset partial file: %v", err))
+			s.failJob(ctx, job, fmt.Sprintf("could not reset partial file: %v", err))
 			return
 		}
 		if _, err := file.Seek(0, io.SeekStart); err != nil {
-			s.failJob(job, fmt.Sprintf("could not reset write position: %v", err))
+			s.failJob(ctx, job, fmt.Sprintf("could not reset write position: %v", err))
 			return
 		}
 		job.BytesDownloaded = 0
@@ -410,8 +531,8 @@ func (s *DownloadService) runDownload(jobID int64) {
 	// transient failure can resume from the partial .part file (issue #1).
 	// The earlier status update only wrote counters; SupportsResume was never
 	// persisted, which made the resume branch above unreachable on retry.
-	if err := s.jobs.UpdateDownloadJobProgress(job); err != nil {
-		s.failJob(job, fmt.Sprintf("could not persist job progress: %v", err))
+	if err := s.jobs.UpdateDownloadJobProgress(ctx, job); err != nil {
+		s.failJob(ctx, job, fmt.Sprintf("could not persist job progress: %v", err))
 		return
 	}
 
@@ -422,15 +543,17 @@ func (s *DownloadService) runDownload(jobID int64) {
 	lastReported := job.BytesDownloaded
 
 	// Wrap the body so a stalled stream (server stops sending mid-download)
-	// fails after stallTimeout instead of blocking the goroutine forever.
-	body := newTimeoutReader(resp.Body, stallTimeout)
+	// fails after stallTimeout instead of blocking the goroutine forever. The
+	// reader also fails when ctx is cancelled, so StopJob/Shutdown interrupt
+	// an in-progress download (issue #11).
+	body := newTimeoutReader(resp.Body, stallTimeout, ctx)
 
 	for {
 		n, readErr := body.Read(buf)
 		if n > 0 {
 			wn, writeErr := file.Write(buf[:n])
 			if writeErr != nil {
-				s.failJob(job, fmt.Sprintf("write failed: %v", writeErr))
+				s.failJob(ctx, job, fmt.Sprintf("write failed: %v", writeErr))
 				return
 			}
 			bytesWrittenThisRun += int64(wn)
@@ -441,13 +564,14 @@ func (s *DownloadService) runDownload(jobID int64) {
 			// regularly regardless of chunk size or alignment (issue #2).
 			if job.BytesDownloaded-lastReported >= progressInterval {
 				if err := s.jobs.UpdateDownloadJobStatus(
+					ctx,
 					jobID,
 					domain.DownloadStatusDownloading,
 					job.BytesDownloaded,
 					job.BytesTotal,
 					"",
 				); err != nil {
-					s.failJob(job, fmt.Sprintf("could not update job status: %v", err))
+					s.failJob(ctx, job, fmt.Sprintf("could not update job status: %v", err))
 					return
 				}
 				lastReported = job.BytesDownloaded
@@ -458,7 +582,7 @@ func (s *DownloadService) runDownload(jobID int64) {
 			if readErr == io.EOF {
 				break
 			}
-			s.failJob(job, fmt.Sprintf("read failed: %v", readErr))
+			s.failJob(ctx, job, fmt.Sprintf("read failed: %v", readErr))
 			return
 		}
 	}
@@ -467,13 +591,14 @@ func (s *DownloadService) runDownload(jobID int64) {
 	// even when the last chunk was smaller than the throttle interval (issue #2).
 	if bytesWrittenThisRun > 0 {
 		if err := s.jobs.UpdateDownloadJobStatus(
+			ctx,
 			jobID,
 			domain.DownloadStatusDownloading,
 			job.BytesDownloaded,
 			job.BytesTotal,
 			"",
 		); err != nil {
-			s.failJob(job, fmt.Sprintf("could not update job status: %v", err))
+			s.failJob(ctx, job, fmt.Sprintf("could not update job status: %v", err))
 			return
 		}
 	}
@@ -481,16 +606,16 @@ func (s *DownloadService) runDownload(jobID int64) {
 	file.Close()
 
 	if err := os.Rename(partPath, finalPath); err != nil {
-		s.failJob(job, fmt.Sprintf("rename failed: %v", err))
+		s.failJob(ctx, job, fmt.Sprintf("rename failed: %v", err))
 		return
 	}
 
-	if err := s.episodes.MarkEpisodeDownloaded(job.EpisodeID, finalPath); err != nil {
-		s.failJob(job, fmt.Sprintf("could not mark episode as downloaded: %v", err))
+	if err := s.episodes.MarkEpisodeDownloaded(ctx, job.EpisodeID, finalPath); err != nil {
+		s.failJob(ctx, job, fmt.Sprintf("could not mark episode as downloaded: %v", err))
 		return
 	}
 
-	if err := s.jobs.DeleteDownloadJob(jobID); err != nil {
+	if err := s.jobs.DeleteDownloadJob(ctx, jobID); err != nil {
 		s.logger.Warn("could not delete completed job", "job_id", jobID, "err", err)
 	}
 }
@@ -499,12 +624,13 @@ func (s *DownloadService) runDownload(jobID int64) {
 // retry can resume from the partial .part file on disk (issue #1). Only the
 // status and error message change; BytesDownloaded/BytesTotal reflect what was
 // actually written before the failure.
-func (s *DownloadService) failJob(job *domain.DownloadJob, errorMsg string) {
+func (s *DownloadService) failJob(ctx context.Context, job *domain.DownloadJob, errorMsg string) {
 	if job == nil {
 		s.logger.Warn("could not fail job: nil job")
 		return
 	}
 	if err := s.jobs.UpdateDownloadJobStatus(
+		ctx,
 		job.ID,
 		domain.DownloadStatusFailed,
 		job.BytesDownloaded,
@@ -516,21 +642,26 @@ func (s *DownloadService) failJob(job *domain.DownloadJob, errorMsg string) {
 }
 
 // timeoutReader wraps an io.Reader and fails a Read if no data arrives within
-// timeout since the last successful Read (or since construction). This bounds
-// how long a stalled download body can block runDownload, complementing the
-// connection/header timeouts on downloadTransport (issue #6). Large legitimate
-// downloads are unaffected because the deadline resets on every Read that
-// returns data.
+// timeout since the last successful Read (or since construction), or as soon as
+// ctx is cancelled. This bounds how long a stalled download body can block
+// runDownload, complementing the connection/header timeouts on
+// downloadTransport (issue #6), and makes an in-progress download interruptible
+// by StopJob/Shutdown (issue #11). Large legitimate downloads are unaffected
+// because the deadline resets on every Read that returns data.
 type timeoutReader struct {
 	r       io.Reader
 	timeout time.Duration
+	ctx     context.Context
 }
 
-func newTimeoutReader(r io.Reader, timeout time.Duration) *timeoutReader {
-	return &timeoutReader{r: r, timeout: timeout}
+func newTimeoutReader(r io.Reader, timeout time.Duration, ctx context.Context) *timeoutReader {
+	return &timeoutReader{r: r, timeout: timeout, ctx: ctx}
 }
 
 func (t *timeoutReader) Read(p []byte) (int, error) {
+	if err := t.ctx.Err(); err != nil {
+		return 0, fmt.Errorf("download cancelled: %w", err)
+	}
 	type readResult struct {
 		n   int
 		err error
@@ -551,6 +682,8 @@ func (t *timeoutReader) Read(p []byte) (int, error) {
 		// Best-effort: signal the goroutine to give up. The underlying body's
 		// Close (deferred by the caller) reclaims its resources.
 		return 0, fmt.Errorf("download stalled: no data for %s", t.timeout)
+	case <-t.ctx.Done():
+		return 0, fmt.Errorf("download cancelled: %w", t.ctx.Err())
 	}
 }
 

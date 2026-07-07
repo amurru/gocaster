@@ -2,6 +2,7 @@ package application
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -178,7 +179,7 @@ func newDownloadTestRepo(t *testing.T, audioURL string) *persistence.SQLiteRepo 
 	t.Cleanup(func() { repo.Close() })
 
 	podcast := &domain.Podcast{Title: "Test", FeedURL: "https://example.com/feed.xml"}
-	if err := repo.Save(podcast); err != nil {
+	if err := repo.Save(context.Background(), podcast); err != nil {
 		t.Fatalf("Save podcast failed: %v", err)
 	}
 	episode := &domain.Episode{
@@ -187,7 +188,7 @@ func newDownloadTestRepo(t *testing.T, audioURL string) *persistence.SQLiteRepo 
 		AudioURL:    audioURL,
 		PublishedAt: time.Now(),
 	}
-	if err := repo.SaveEpisode(episode); err != nil {
+	if err := repo.SaveEpisode(context.Background(), episode); err != nil {
 		t.Fatalf("SaveEpisode failed: %v", err)
 	}
 	return repo
@@ -202,7 +203,7 @@ func waitForJobCondition(t *testing.T, repo *persistence.SQLiteRepo, episodeID i
 	var lastJob *domain.DownloadJob
 	var lastErr error
 	for time.Now().Before(deadline) {
-		job, err := repo.FindDownloadJobByEpisodeID(episodeID)
+		job, err := repo.FindDownloadJobByEpisodeID(context.Background(), episodeID)
 		lastJob, lastErr = job, err
 		if err == nil && job != nil && job.Status == want {
 			return job
@@ -227,12 +228,12 @@ func TestDownloadService_FailurePreservesResumeData(t *testing.T) {
 	repo := newDownloadTestRepo(t, srv.URL+"/ep.mp3")
 	svc := NewDownloadService(repo, repo, repo, dir, nil)
 
-	episode, err := repo.FindEpisodeByID(1)
+	episode, err := repo.FindEpisodeByID(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("FindEpisodeByID failed: %v", err)
 	}
 
-	if err := svc.QueueEpisodeDownload(episode.ID); err != nil {
+	if err := svc.QueueEpisodeDownload(context.Background(), episode.ID); err != nil {
 		t.Fatalf("QueueEpisodeDownload failed: %v", err)
 	}
 
@@ -316,13 +317,13 @@ func TestDownloadService_RetriesResumeFromPartialFile(t *testing.T) {
 	repo := newDownloadTestRepo(t, srv.URL+"/ep.mp3")
 	svc := NewDownloadService(repo, repo, repo, dir, nil)
 
-	episode, err := repo.FindEpisodeByID(1)
+	episode, err := repo.FindEpisodeByID(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("FindEpisodeByID failed: %v", err)
 	}
 
 	// First attempt: queues and starts the download, which aborts mid-stream.
-	if err := svc.QueueEpisodeDownload(episode.ID); err != nil {
+	if err := svc.QueueEpisodeDownload(context.Background(), episode.ID); err != nil {
 		t.Fatalf("QueueEpisodeDownload failed: %v", err)
 	}
 	job := waitForJobCondition(t, repo, episode.ID, domain.DownloadStatusFailed, 3*time.Second)
@@ -346,20 +347,20 @@ func TestDownloadService_RetriesResumeFromPartialFile(t *testing.T) {
 	}
 
 	// Retry: should resume from the partial file and complete.
-	if err := svc.RetryJob(job.ID); err != nil {
+	if err := svc.RetryJob(context.Background(), job.ID); err != nil {
 		t.Fatalf("RetryJob failed: %v", err)
 	}
 
 	// Wait for completion (the job is deleted on success).
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		ep, _ := repo.FindEpisodeByID(episode.ID)
+		ep, _ := repo.FindEpisodeByID(context.Background(), episode.ID)
 		if ep != nil && ep.IsDownloaded {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	ep, _ := repo.FindEpisodeByID(episode.ID)
+	ep, _ := repo.FindEpisodeByID(context.Background(), episode.ID)
 	if ep == nil || !ep.IsDownloaded {
 		t.Fatal("download did not complete after retry")
 	}
@@ -412,24 +413,24 @@ func TestDownloadService_ProgressThrottle(t *testing.T) {
 	repo := newDownloadTestRepo(t, srv.URL+"/ep.m4a")
 	svc := NewDownloadService(repo, repo, repo, dir, nil)
 
-	episode, err := repo.FindEpisodeByID(1)
+	episode, err := repo.FindEpisodeByID(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("FindEpisodeByID failed: %v", err)
 	}
-	if err := svc.QueueEpisodeDownload(episode.ID); err != nil {
+	if err := svc.QueueEpisodeDownload(context.Background(), episode.ID); err != nil {
 		t.Fatalf("QueueEpisodeDownload failed: %v", err)
 	}
 
 	// Wait for completion (job is deleted on success) by polling the episode.
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		ep, _ := repo.FindEpisodeByID(episode.ID)
+		ep, _ := repo.FindEpisodeByID(context.Background(), episode.ID)
 		if ep != nil && ep.IsDownloaded {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	ep, _ := repo.FindEpisodeByID(episode.ID)
+	ep, _ := repo.FindEpisodeByID(context.Background(), episode.ID)
 	if ep == nil || !ep.IsDownloaded {
 		t.Fatalf("download did not complete; episode downloaded=%v", ep != nil && ep.IsDownloaded)
 	}
@@ -459,12 +460,12 @@ func TestDownloadService_MalformedURLErrors(t *testing.T) {
 	repo := newDownloadTestRepo(t, "http://[::1]:named") // invalid URL
 
 	svc := NewDownloadService(repo, repo, repo, dir, nil)
-	episode, err := repo.FindEpisodeByID(1)
+	episode, err := repo.FindEpisodeByID(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("FindEpisodeByID failed: %v", err)
 	}
 
-	if err := svc.QueueEpisodeDownload(episode.ID); err != nil {
+	if err := svc.QueueEpisodeDownload(context.Background(), episode.ID); err != nil {
 		t.Fatalf("QueueEpisodeDownload failed: %v", err)
 	}
 
@@ -502,11 +503,11 @@ func TestDownloadService_HTTPClientTimeout(t *testing.T) {
 		Transport: &http.Transport{ResponseHeaderTimeout: 200 * time.Millisecond},
 	}
 
-	episode, err := repo.FindEpisodeByID(1)
+	episode, err := repo.FindEpisodeByID(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("FindEpisodeByID failed: %v", err)
 	}
-	if err := stallSvc.QueueEpisodeDownload(episode.ID); err != nil {
+	if err := stallSvc.QueueEpisodeDownload(context.Background(), episode.ID); err != nil {
 		t.Fatalf("QueueEpisodeDownload failed: %v", err)
 	}
 
@@ -523,7 +524,7 @@ func TestFailJob_PreservesByteCounters(t *testing.T) {
 	dir := t.TempDir()
 	svc := NewDownloadService(repo, repo, repo, dir, nil)
 
-	episode, err := repo.FindEpisodeByID(1)
+	episode, err := repo.FindEpisodeByID(context.Background(), 1)
 	if err != nil {
 		t.Fatalf("FindEpisodeByID failed: %v", err)
 	}
@@ -534,14 +535,14 @@ func TestFailJob_PreservesByteCounters(t *testing.T) {
 		BytesTotal:      100000,
 		SupportsResume:  true,
 	}
-	if err := repo.SaveDownloadJob(job); err != nil {
+	if err := repo.SaveDownloadJob(context.Background(), job); err != nil {
 		t.Fatalf("SaveDownloadJob failed: %v", err)
 	}
 
 	// Simulate a failure after partial progress.
-	svc.failJob(job, "transient network error")
+	svc.failJob(context.Background(), job, "transient network error")
 
-	stored, err := repo.FindDownloadJobByEpisodeID(episode.ID)
+	stored, err := repo.FindDownloadJobByEpisodeID(context.Background(), episode.ID)
 	if err != nil {
 		t.Fatalf("FindDownloadJobByEpisodeID failed: %v", err)
 	}

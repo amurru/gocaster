@@ -1,6 +1,7 @@
 package system
 
 import (
+	"context"
 	"testing"
 
 	"github.com/amurru/gocaster/internal/domain"
@@ -17,11 +18,12 @@ func TestNewDiscordBroadcasterRequiresClientID(t *testing.T) {
 }
 
 func TestDiscordBroadcasterStoppedStateWithoutLogin(t *testing.T) {
+	ctx := context.Background()
 	b, err := NewDiscordBroadcaster("123456789012345678")
 	if err != nil {
 		t.Fatalf("unexpected constructor error: %v", err)
 	}
-	if err := b.PublishState(domain.PlaybackStateStopped, domain.PlaybackMetadata{}); err != nil {
+	if err := b.PublishState(ctx, domain.PlaybackStateStopped, domain.PlaybackMetadata{}); err != nil {
 		t.Fatalf("stopped state should not require active discord session: %v", err)
 	}
 }

@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"sync"
@@ -96,13 +97,14 @@ func (r *SQLiteRepo) Close() error {
 	return r.db.Close()
 }
 
-func (r *SQLiteRepo) Save(podcast *domain.Podcast) error {
+func (r *SQLiteRepo) Save(ctx context.Context, podcast *domain.Podcast) error {
 	if podcast.ID == 0 {
 		query := `
 			INSERT INTO podcasts (title, feed_url, description, image_url, last_updated)
 			VALUES (?, ?, ?, ?, ?)
 		`
-		result, err := r.db.Exec(
+		result, err := r.db.ExecContext(
+			ctx,
 			query,
 			podcast.Title,
 			podcast.FeedURL,
@@ -127,7 +129,8 @@ func (r *SQLiteRepo) Save(podcast *domain.Podcast) error {
 		UPDATE podcasts SET title = ?, feed_url = ?, description = ?, image_url = ?, last_updated = ?
 		WHERE id = ?
 	`
-	_, err := r.db.Exec(
+	_, err := r.db.ExecContext(
+		ctx,
 		query,
 		podcast.Title,
 		podcast.FeedURL,
@@ -139,9 +142,9 @@ func (r *SQLiteRepo) Save(podcast *domain.Podcast) error {
 	return err
 }
 
-func (r *SQLiteRepo) FindAll() ([]domain.Podcast, error) {
+func (r *SQLiteRepo) FindAll(ctx context.Context) ([]domain.Podcast, error) {
 	query := `SELECT id, title, feed_url, description, image_url, last_updated FROM podcasts ORDER BY title`
-	rows, err := r.db.Query(query)
+	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -160,10 +163,10 @@ func (r *SQLiteRepo) FindAll() ([]domain.Podcast, error) {
 	return podcasts, rows.Err()
 }
 
-func (r *SQLiteRepo) FindByID(id int64) (*domain.Podcast, error) {
+func (r *SQLiteRepo) FindByID(ctx context.Context, id int64) (*domain.Podcast, error) {
 	query := `SELECT id, title, feed_url, description, image_url, last_updated FROM podcasts WHERE id = ?`
 	var p domain.Podcast
-	err := r.db.QueryRow(query, id).
+	err := r.db.QueryRowContext(ctx, query, id).
 		Scan(&p.ID, &p.Title, &p.FeedURL, &p.Description, &p.ImageURL, &p.LastUpdated)
 	if err != nil {
 		return nil, err
@@ -171,17 +174,18 @@ func (r *SQLiteRepo) FindByID(id int64) (*domain.Podcast, error) {
 	return &p, nil
 }
 
-func (r *SQLiteRepo) Delete(id int64) error {
-	_, err := r.db.Exec(`DELETE FROM podcasts WHERE id = ?`, id)
+func (r *SQLiteRepo) Delete(ctx context.Context, id int64) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM podcasts WHERE id = ?`, id)
 	return err
 }
 
-func (r *SQLiteRepo) SaveEpisode(episode *domain.Episode) error {
+func (r *SQLiteRepo) SaveEpisode(ctx context.Context, episode *domain.Episode) error {
 	query := `
 		INSERT INTO episodes (podcast_id, title, description, audio_url, published_at, playback_duration, is_played, is_downloaded, local_path)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	result, err := r.db.Exec(
+	result, err := r.db.ExecContext(
+		ctx,
 		query,
 		episode.PodcastID,
 		episode.Title,
@@ -206,9 +210,9 @@ func (r *SQLiteRepo) SaveEpisode(episode *domain.Episode) error {
 	return nil
 }
 
-func (r *SQLiteRepo) FindEpisodesByPodcastID(id int64) ([]domain.Episode, error) {
+func (r *SQLiteRepo) FindEpisodesByPodcastID(ctx context.Context, id int64) ([]domain.Episode, error) {
 	query := `SELECT id, podcast_id, title, description, audio_url, published_at, playback_duration, is_played, is_downloaded, local_path FROM episodes WHERE podcast_id = ? ORDER BY published_at DESC`
-	rows, err := r.db.Query(query, id)
+	rows, err := r.db.QueryContext(ctx, query, id)
 	if err != nil {
 		return nil, err
 	}
@@ -238,15 +242,15 @@ func (r *SQLiteRepo) FindEpisodesByPodcastID(id int64) ([]domain.Episode, error)
 	return episodes, rows.Err()
 }
 
-func (r *SQLiteRepo) DeleteEpisode(id int64) error {
-	_, err := r.db.Exec(`DELETE FROM episodes WHERE id = ?`, id)
+func (r *SQLiteRepo) DeleteEpisode(ctx context.Context, id int64) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM episodes WHERE id = ?`, id)
 	return err
 }
 
-func (r *SQLiteRepo) FindEpisodeByID(id int64) (*domain.Episode, error) {
+func (r *SQLiteRepo) FindEpisodeByID(ctx context.Context, id int64) (*domain.Episode, error) {
 	query := `SELECT id, podcast_id, title, description, audio_url, published_at, playback_duration, is_played, is_downloaded, local_path FROM episodes WHERE id = ?`
 	var e domain.Episode
-	err := r.db.QueryRow(query, id).
+	err := r.db.QueryRowContext(ctx, query, id).
 		Scan(&e.ID, &e.PodcastID, &e.Title, &e.Description, &e.AudioURL, &e.PublishedAt, &e.PlaybackDuration, &e.IsPlayed, &e.IsDownloaded, &e.LocalPath)
 	if err != nil {
 		return nil, err
@@ -254,17 +258,18 @@ func (r *SQLiteRepo) FindEpisodeByID(id int64) (*domain.Episode, error) {
 	return &e, nil
 }
 
-func (r *SQLiteRepo) UpdateEpisodePlaybackState(id int64, isPlayed bool) error {
-	_, err := r.db.Exec(`UPDATE episodes SET is_played = ? WHERE id = ?`, isPlayed, id)
+func (r *SQLiteRepo) UpdateEpisodePlaybackState(ctx context.Context, id int64, isPlayed bool) error {
+	_, err := r.db.ExecContext(ctx, `UPDATE episodes SET is_played = ? WHERE id = ?`, isPlayed, id)
 	return err
 }
 
-func (r *SQLiteRepo) SaveDownloadJob(job *domain.DownloadJob) error {
+func (r *SQLiteRepo) SaveDownloadJob(ctx context.Context, job *domain.DownloadJob) error {
 	query := `
 		INSERT INTO downloads (episode_id, status, bytes_downloaded, bytes_total, temp_path, final_path, etag, last_modified, supports_resume, error_message)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`
-	result, err := r.db.Exec(
+	result, err := r.db.ExecContext(
+		ctx,
 		query,
 		job.EpisodeID,
 		job.Status,
@@ -290,10 +295,10 @@ func (r *SQLiteRepo) SaveDownloadJob(job *domain.DownloadJob) error {
 	return nil
 }
 
-func (r *SQLiteRepo) FindDownloadJobByEpisodeID(episodeID int64) (*domain.DownloadJob, error) {
+func (r *SQLiteRepo) FindDownloadJobByEpisodeID(ctx context.Context, episodeID int64) (*domain.DownloadJob, error) {
 	query := `SELECT id, episode_id, status, bytes_downloaded, bytes_total, temp_path, final_path, etag, last_modified, supports_resume, error_message, created_at, updated_at FROM downloads WHERE episode_id = ?`
 	var j domain.DownloadJob
-	err := r.db.QueryRow(query, episodeID).
+	err := r.db.QueryRowContext(ctx, query, episodeID).
 		Scan(&j.ID, &j.EpisodeID, &j.Status, &j.BytesDownloaded, &j.BytesTotal, &j.TempPath, &j.FinalPath, &j.ETag, &j.LastModified, &j.SupportsResume, &j.ErrorMessage, &j.CreatedAt, &j.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -304,10 +309,10 @@ func (r *SQLiteRepo) FindDownloadJobByEpisodeID(episodeID int64) (*domain.Downlo
 // FindDownloadJobByID loads a single job by primary key. It replaces the
 // previous DownloadService.findJobByID helper, which called FindAllDownloadJobs
 // and iterated the whole table on every status update (issue #17 perf bug).
-func (r *SQLiteRepo) FindDownloadJobByID(id int64) (*domain.DownloadJob, error) {
+func (r *SQLiteRepo) FindDownloadJobByID(ctx context.Context, id int64) (*domain.DownloadJob, error) {
 	query := `SELECT id, episode_id, status, bytes_downloaded, bytes_total, temp_path, final_path, etag, last_modified, supports_resume, error_message, created_at, updated_at FROM downloads WHERE id = ?`
 	var j domain.DownloadJob
-	err := r.db.QueryRow(query, id).
+	err := r.db.QueryRowContext(ctx, query, id).
 		Scan(&j.ID, &j.EpisodeID, &j.Status, &j.BytesDownloaded, &j.BytesTotal, &j.TempPath, &j.FinalPath, &j.ETag, &j.LastModified, &j.SupportsResume, &j.ErrorMessage, &j.CreatedAt, &j.UpdatedAt)
 	if err != nil {
 		return nil, err
@@ -315,9 +320,9 @@ func (r *SQLiteRepo) FindDownloadJobByID(id int64) (*domain.DownloadJob, error) 
 	return &j, nil
 }
 
-func (r *SQLiteRepo) FindAllDownloadJobs() ([]domain.DownloadJob, error) {
+func (r *SQLiteRepo) FindAllDownloadJobs(ctx context.Context) ([]domain.DownloadJob, error) {
 	query := `SELECT id, episode_id, status, bytes_downloaded, bytes_total, temp_path, final_path, etag, last_modified, supports_resume, error_message, created_at, updated_at FROM downloads ORDER BY updated_at DESC`
-	rows, err := r.db.Query(query)
+	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
 	}
@@ -351,6 +356,7 @@ func (r *SQLiteRepo) FindAllDownloadJobs() ([]domain.DownloadJob, error) {
 }
 
 func (r *SQLiteRepo) UpdateDownloadJobStatus(
+	ctx context.Context,
 	id int64,
 	status domain.DownloadStatus,
 	bytesDownloaded int64,
@@ -358,7 +364,7 @@ func (r *SQLiteRepo) UpdateDownloadJobStatus(
 	errorMsg string,
 ) error {
 	query := `UPDATE downloads SET status = ?, bytes_downloaded = ?, bytes_total = ?, error_message = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
-	_, err := r.db.Exec(query, status, bytesDownloaded, bytesTotal, errorMsg, id)
+	_, err := r.db.ExecContext(ctx, query, status, bytesDownloaded, bytesTotal, errorMsg, id)
 	return err
 }
 
@@ -366,7 +372,7 @@ func (r *SQLiteRepo) UpdateDownloadJobStatus(
 // (counters, temp/final paths, ETag, Last-Modified, SupportsResume) without
 // altering its status. This lets runDownload record that the server honored a
 // Range request so a subsequent retry can resume from the partial file.
-func (r *SQLiteRepo) UpdateDownloadJobProgress(job *domain.DownloadJob) error {
+func (r *SQLiteRepo) UpdateDownloadJobProgress(ctx context.Context, job *domain.DownloadJob) error {
 	if job == nil {
 		return fmt.Errorf("cannot update progress for nil job")
 	}
@@ -374,7 +380,8 @@ func (r *SQLiteRepo) UpdateDownloadJobProgress(job *domain.DownloadJob) error {
 		SET bytes_downloaded = ?, bytes_total = ?, temp_path = ?, final_path = ?,
 		    etag = ?, last_modified = ?, supports_resume = ?, updated_at = CURRENT_TIMESTAMP
 		WHERE id = ?`
-	_, err := r.db.Exec(
+	_, err := r.db.ExecContext(
+		ctx,
 		query,
 		job.BytesDownloaded,
 		job.BytesTotal,
@@ -388,20 +395,20 @@ func (r *SQLiteRepo) UpdateDownloadJobProgress(job *domain.DownloadJob) error {
 	return err
 }
 
-func (r *SQLiteRepo) CountNonFailedJobs() (int, error) {
+func (r *SQLiteRepo) CountNonFailedJobs(ctx context.Context) (int, error) {
 	query := `SELECT COUNT(*) FROM downloads WHERE status != 'failed'`
 	var count int
-	err := r.db.QueryRow(query).Scan(&count)
+	err := r.db.QueryRowContext(ctx, query).Scan(&count)
 	return count, err
 }
 
-func (r *SQLiteRepo) DeleteDownloadJob(id int64) error {
-	_, err := r.db.Exec(`DELETE FROM downloads WHERE id = ?`, id)
+func (r *SQLiteRepo) DeleteDownloadJob(ctx context.Context, id int64) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM downloads WHERE id = ?`, id)
 	return err
 }
 
-func (r *SQLiteRepo) MarkEpisodeDownloaded(episodeID int64, localPath string) error {
+func (r *SQLiteRepo) MarkEpisodeDownloaded(ctx context.Context, episodeID int64, localPath string) error {
 	query := `UPDATE episodes SET is_downloaded = 1, local_path = ? WHERE id = ?`
-	_, err := r.db.Exec(query, localPath, episodeID)
+	_, err := r.db.ExecContext(ctx, query, localPath, episodeID)
 	return err
 }

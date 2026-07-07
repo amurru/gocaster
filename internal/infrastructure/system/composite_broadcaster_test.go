@@ -1,6 +1,7 @@
 package system
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -17,38 +18,39 @@ type mockBroadcaster struct {
 	closeErr        error
 }
 
-func (m *mockBroadcaster) PublishState(domain.PlaybackState, domain.PlaybackMetadata) error {
+func (m *mockBroadcaster) PublishState(context.Context, domain.PlaybackState, domain.PlaybackMetadata) error {
 	m.stateCalls++
 	return m.stateErr
 }
 
-func (m *mockBroadcaster) PublishPosition(float64, float64) error {
+func (m *mockBroadcaster) PublishPosition(context.Context, float64, float64) error {
 	m.positionCalls++
 	return m.positionErr
 }
 
-func (m *mockBroadcaster) Close() error {
+func (m *mockBroadcaster) Close(context.Context) error {
 	m.closeCalls++
 	return m.closeErr
 }
 
-func (m *mockBroadcaster) SetController(domain.PlaybackController) {
+func (m *mockBroadcaster) SetController(context.Context, domain.PlaybackController) {
 	m.controllerCalls++
 }
 
 func TestCompositeBroadcasterFanOut(t *testing.T) {
+	ctx := context.Background()
 	first := &mockBroadcaster{}
 	second := &mockBroadcaster{}
 	composite := NewCompositeBroadcaster(first, second)
 
-	composite.SetController(nil)
-	if err := composite.PublishState(domain.PlaybackStatePlaying, domain.PlaybackMetadata{}); err != nil {
+	composite.SetController(ctx, nil)
+	if err := composite.PublishState(ctx, domain.PlaybackStatePlaying, domain.PlaybackMetadata{}); err != nil {
 		t.Fatalf("PublishState failed: %v", err)
 	}
-	if err := composite.PublishPosition(10, 100); err != nil {
+	if err := composite.PublishPosition(ctx, 10, 100); err != nil {
 		t.Fatalf("PublishPosition failed: %v", err)
 	}
-	if err := composite.Close(); err != nil {
+	if err := composite.Close(ctx); err != nil {
 		t.Fatalf("Close failed: %v", err)
 	}
 
@@ -71,11 +73,12 @@ func TestCompositeBroadcasterFanOut(t *testing.T) {
 }
 
 func TestCompositeBroadcasterAggregatesErrors(t *testing.T) {
+	ctx := context.Background()
 	first := &mockBroadcaster{stateErr: errors.New("state one")}
 	second := &mockBroadcaster{stateErr: errors.New("state two")}
 	composite := NewCompositeBroadcaster(first, second)
 
-	err := composite.PublishState(domain.PlaybackStatePlaying, domain.PlaybackMetadata{})
+	err := composite.PublishState(ctx, domain.PlaybackStatePlaying, domain.PlaybackMetadata{})
 	if err == nil {
 		t.Fatal("expected aggregated error from state publish")
 	}
