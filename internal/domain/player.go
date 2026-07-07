@@ -24,6 +24,12 @@ type PlaybackStatus struct {
 // Player is the audio playback port. Every method takes a context.Context so
 // the caller can cancel in-flight operations, set deadlines, and propagate
 // request-scoped tracing (issue #11).
+//
+// Note on Close: it is a cleanup operation, NOT a cancellable one. Close(ctx)
+// must still release resources when ctx is already cancelled — the
+// composition root cancels the root context before calling Close during
+// shutdown — so implementations must not gate the release on ctx.Err(); use
+// ctx only for tracing or bounded waits.
 type Player interface {
 	Play(ctx context.Context, source string) error
 	Stop(ctx context.Context) error
@@ -68,6 +74,10 @@ type PlaybackController interface {
 // PlaybackBroadcaster fans playback state out to external surfaces (MPRIS,
 // Discord). Every method takes a context.Context so publishes can be cancelled
 // on shutdown (issue #11).
+//
+// As with Player.Close, Close(ctx) is a cleanup operation and must still
+// release broadcaster resources when ctx is already cancelled (callers cancel
+// the root context before shutdown).
 type PlaybackBroadcaster interface {
 	PublishState(ctx context.Context, state PlaybackState, metadata PlaybackMetadata) error
 	PublishPosition(ctx context.Context, positionSec float64, durationSec float64) error

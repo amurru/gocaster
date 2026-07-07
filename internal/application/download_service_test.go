@@ -559,3 +559,59 @@ func TestFailJob_PreservesByteCounters(t *testing.T) {
 		t.Errorf("ErrorMessage = %q, want %q", stored.ErrorMessage, "transient network error")
 	}
 }
+
+// TestFailJob_PersistsEvenWithCancelledContext covers the core of the
+// CodeRabbit finding on PR #41: failJob is invoked on the cancellation path
+// (StopJob cancels the per-job ctx, which makes the read/request fail and land
+// in failJob). Because the passed ctx is already cancelled, failJob must
+// perform the status write with an uncancellable context — otherwise
+// ExecContext returns context.Canceled and the job stays stuck in Downloading
+// forever, reintroducing the resume-data loss from issue #1 on the
+// cancellation path.
+//
+// This is a focused regression test for that invariant; the end-to-end
+// cancellation flow (StopJob -> read fails -> failJob) is exercised in
+// TestDownloadService_RetriesResumeFromPartialFile's abort-then-retry path.
+func TestFailJob_PersistsEvenWithCancelledContext(t *testing.T) {
+	repo := newDownloadTestRepo(t, "https://example.com/ep.mp3")
+	dir := t.TempDir()
+	svc := NewDownloadService(repo, repo, repo, dir, nil)
+
+	episode, err := repo.FindEpisodeByID(context.Background(), 1)
+	if err != nil {
+		t.Fatalf("FindEpisodeByID failed: %v", err)
+	}
+	job := &domain.DownloadJob{
+		EpisodeID:       episode.ID,
+		Status:          domain.DownloadStatusDownloading,
+		BytesDownloaded: 4096,
+		BytesTotal:      1_000_000,
+		SupportsResume:  true,
+	}
+	if err := repo.SaveDownloadJob(context.Background(), job); err != nil {
+		t.Fatalf("SaveDownloadJob failed: %v", err)
+	}
+
+	// Simulate the cancellation path: a context that is ALREADY cancelled,
+	// exactly as runDownload observes after StopJob fires.
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	svc.failJob(cancelledCtx, job, "download cancelled: context canceled")
+
+	stored, err := repo.FindDownloadJobByEpisodeID(context.Background(), episode.ID)
+	if err != nil {
+		t.Fatalf("FindDownloadJobByEpisodeID failed: %v", err)
+	}
+	if stored.Status != domain.DownloadStatusFailed {
+		t.Fatalf("expected status failed (the bug: cancelled ctx silently no-op'd the write), got %s", stored.Status)
+	}
+	if stored.BytesDownloaded != 4096 {
+		t.Errorf("BytesDownloaded = %d, want 4096 (must be preserved on the cancellation path)", stored.BytesDownloaded)
+	}
+	if stored.ErrorMessage == "" {
+		t.Error("expected non-empty error message on the cancellation path")
+	}
+}
+
+

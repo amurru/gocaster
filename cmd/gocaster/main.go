@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"syscall"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/amurru/gocaster/internal/application"
@@ -69,13 +70,15 @@ func run() error {
 	// previously never closed, leaking the DB handle.
 	defer repo.Close()
 
-	// Root context: cancelled on OS interrupt (Ctrl-C / SIGTERM) and again
-	// explicitly at the end of run(). Every service call and every in-flight
-	// download goroutine derives from it, so cancellation propagates into the
-	// DB (ExecContext), the RSS fetch, the HTTP download body, and the player
-	// (issue #11). defer cancelRoot is the catch-all that runs on every return
+	// Root context: cancelled on SIGINT (Ctrl-C) or SIGTERM (e.g. systemd
+	// stop), and again explicitly at the end of run(). Every service call and
+	// every in-flight download goroutine derives from it, so cancellation
+	// propagates into the DB (ExecContext), the RSS fetch, the HTTP download
+	// body, and the player (issue #11). It is also passed to tea.NewProgram so
+	// the TUI's event loop observes cancellation and exits (CodeRabbit review
+	// of PR #41). defer cancelRoot is the catch-all that runs on every return
 	// path, including the p.Run() error path.
-	ctx, cancelRoot := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, cancelRoot := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancelRoot()
 
 	fetcher := rss.NewFeedFetcher()
@@ -136,7 +139,11 @@ func run() error {
 	}
 	model := tui.NewModel(ctx, podcastSvc, downloadSvc, playerSvc, settings, saveSettings, customThemesDir)
 
-	p := tea.NewProgram(model)
+	// tea.WithContext makes the program's event loop observe ctx: when the root
+	// context is cancelled (SIGINT/SIGTERM), the loop exits and p.Run()
+	// returns, instead of relying solely on the terminal's Ctrl-C handling
+	// (CodeRabbit review of PR #41).
+	p := tea.NewProgram(model, tea.WithContext(ctx))
 	// The previously bare tea.Quit() call after Run() was a no-op: tea.Quit is
 	// only meaningful as a command returned from Update, and Run() has already
 	// returned. Cleanup happens via the deferred calls below and the root

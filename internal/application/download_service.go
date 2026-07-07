@@ -87,13 +87,22 @@ func (s *DownloadService) SetRootContext(ctx context.Context) {
 	s.mu.Unlock()
 }
 
-// jobContext derives a per-job context from the root, records its cancel func
-// so StopJob/Shutdown can cancel it, and returns the context plus a cleanup
-// function the caller defers to remove the entry once runDownload exits
-// (issue #11).
-func (s *DownloadService) jobContext(jobID int64) (context.Context, func()) {
+// registerJobCancel derives a per-job context from the root, records its cancel
+// entry in s.cancels so StopJob/Shutdown can cancel it, and returns the context
+// plus a cleanup function the caller defers to remove the entry once runDownload
+// exits (issue #11).
+//
+// It is called by StartJob/ResumeJob/RetryJob BEFORE the goroutine is spawned,
+// so there is no window in which StopJob(jobID) would miss a freshly-started
+// job (CodeRabbit review of PR #41).
+func (s *DownloadService) registerJobCancel(jobID int64) (context.Context, func()) {
 	s.mu.Lock()
 	parent := s.rootCtx
+	// If a previous attempt's cancel is still registered (e.g. retry racing
+	// with completion), cancel it before overwriting to avoid a leak.
+	if prev, ok := s.cancels[jobID]; ok {
+		prev.cancel()
+	}
 	s.mu.Unlock()
 
 	ctx, cancel := context.WithCancel(parent)
@@ -104,11 +113,6 @@ func (s *DownloadService) jobContext(jobID int64) (context.Context, func()) {
 	entry := &cancelEntry{cancel: cancel}
 
 	s.mu.Lock()
-	// If a previous attempt's cancel is still registered (e.g. retry racing
-	// with completion), cancel it before overwriting to avoid a leak.
-	if prev, ok := s.cancels[jobID]; ok {
-		prev.cancel()
-	}
 	s.cancels[jobID] = entry
 	s.mu.Unlock()
 
@@ -230,11 +234,13 @@ func (s *DownloadService) StartJob(ctx context.Context, jobID int64) error {
 		return fmt.Errorf("could not start job: %w", err)
 	}
 
-	// Spawn the worker. runDownload derives its own per-job context from the
-	// service root (NOT the caller's ctx, which dies as soon as the tea.Cmd
-	// closure returns), so the download outlives the request and stays
-	// cancellable via StopJob/Shutdown (issue #11).
-	go s.runDownload(jobID)
+	// Register the per-job cancel BEFORE spawning the worker so StopJob can
+	// cancel this job immediately, with no window in which the entry is missing
+	// (CodeRabbit review of PR #41). The worker uses this context (derived from
+	// the service root, NOT the caller's ctx which dies with the tea.Cmd
+	// closure) so the download outlives the request and stays cancellable via
+	// StopJob/Shutdown (issue #11).
+	s.startWorker(jobID)
 
 	return nil
 }
@@ -261,7 +267,7 @@ func (s *DownloadService) ResumeJob(ctx context.Context, jobID int64) error {
 		return fmt.Errorf("could not resume job: %w", err)
 	}
 
-	go s.runDownload(jobID)
+	s.startWorker(jobID)
 
 	return nil
 }
@@ -294,9 +300,17 @@ func (s *DownloadService) RetryJob(ctx context.Context, jobID int64) error {
 		return fmt.Errorf("could not retry job: %w", err)
 	}
 
-	go s.runDownload(jobID)
+	s.startWorker(jobID)
 
 	return nil
+}
+
+// startWorker registers the job's cancel entry and spawns runDownload under
+// that context. Split out of StartJob/ResumeJob/RetryJob so all three share
+// the same "register before spawn" ordering (CodeRabbit review of PR #41).
+func (s *DownloadService) startWorker(jobID int64) {
+	ctx, cleanup := s.registerJobCancel(jobID)
+	go s.runDownload(ctx, cleanup, jobID)
 }
 
 func (s *DownloadService) ListJobs(ctx context.Context) ([]domain.DownloadJob, error) {
@@ -335,13 +349,14 @@ func (s *DownloadService) ListJobsWithEpisodes(ctx context.Context) ([]DownloadJ
 	return views, nil
 }
 
-func (s *DownloadService) runDownload(jobID int64) {
-	// Derive a per-job context from the service root. It is cancelled by
-	// StopJob/Shutdown (issue #11); runDownload observes it at every blocking
-	// point (DB lookups, the HTTP request, each body Read) and fails the job
-	// cleanly on cancellation. The cleanup func unregisters the cancel entry
-	// when runDownload exits so a later retry can re-register a fresh one.
-	ctx, cleanup := s.jobContext(jobID)
+// runDownload executes a single download under the per-job context its caller
+// (startWorker) already registered. The cleanup func unregisters the cancel
+// entry when runDownload exits so a later retry can re-register a fresh one.
+// ctx is observed at every blocking point (DB lookups, the HTTP request, each
+// body Read) and the job is failed cleanly on cancellation (issue #11). Note
+// failJob writes the failure with an uncancellable context, so a cancelled
+// download is still persisted as Failed with its partial bytes preserved.
+func (s *DownloadService) runDownload(ctx context.Context, cleanup func(), jobID int64) {
 	defer cleanup()
 
 	if err := ctx.Err(); err != nil {
@@ -544,8 +559,9 @@ func (s *DownloadService) runDownload(jobID int64) {
 
 	// Wrap the body so a stalled stream (server stops sending mid-download)
 	// fails after stallTimeout instead of blocking the goroutine forever. The
-	// reader also fails when ctx is cancelled, so StopJob/Shutdown interrupt
-	// an in-progress download (issue #11).
+	// reader also fails when ctx is cancelled: an AfterFunc closes resp.Body on
+	// cancellation, which unblocks the in-progress Read promptly and
+	// deterministically (issue #11).
 	body := newTimeoutReader(resp.Body, stallTimeout, ctx)
 
 	for {
@@ -624,13 +640,21 @@ func (s *DownloadService) runDownload(jobID int64) {
 // retry can resume from the partial .part file on disk (issue #1). Only the
 // status and error message change; BytesDownloaded/BytesTotal reflect what was
 // actually written before the failure.
-func (s *DownloadService) failJob(ctx context.Context, job *domain.DownloadJob, errorMsg string) {
+//
+// The status write uses a fresh, uncancellable context on purpose: failJob is
+// the cleanup path and is itself often triggered BY cancellation (StopJob /
+// Shutdown cancel the per-job ctx, which makes the read fail and land here).
+// Writing with the now-cancelled ctx would make ExecContext return
+// context.Canceled and the job would stay stuck in Downloading — exactly the
+// resume-data loss issue #1 fixed, reintroduced on the cancellation path
+// (CodeRabbit review of PR #41).
+func (s *DownloadService) failJob(_ context.Context, job *domain.DownloadJob, errorMsg string) {
 	if job == nil {
 		s.logger.Warn("could not fail job: nil job")
 		return
 	}
 	if err := s.jobs.UpdateDownloadJobStatus(
-		ctx,
+		context.Background(),
 		job.ID,
 		domain.DownloadStatusFailed,
 		job.BytesDownloaded,
@@ -641,21 +665,49 @@ func (s *DownloadService) failJob(ctx context.Context, job *domain.DownloadJob, 
 	}
 }
 
-// timeoutReader wraps an io.Reader and fails a Read if no data arrives within
-// timeout since the last successful Read (or since construction), or as soon as
-// ctx is cancelled. This bounds how long a stalled download body can block
-// runDownload, complementing the connection/header timeouts on
+// timeoutReader wraps a response body and fails a Read if no data arrives
+// within timeout since the last successful Read (or since construction), or as
+// soon as ctx is cancelled. This bounds how long a stalled download body can
+// block runDownload, complementing the connection/header timeouts on
 // downloadTransport (issue #6), and makes an in-progress download interruptible
 // by StopJob/Shutdown (issue #11). Large legitimate downloads are unaffected
 // because the deadline resets on every Read that returns data.
+//
+// To make cancellation prompt and deterministic, newTimeoutReader registers a
+// context.AfterFunc that closes the body when ctx is cancelled. Closing the
+// body unblocks any in-progress Read on the underlying connection regardless of
+// transport behavior — relying on ctx.Done() in the select alone is NOT enough,
+// because an http.Response.Body blocked in a buffered Read does not always
+// observe the context cancellation within a useful timeframe (CodeRabbit review
+// of PR #41).
 type timeoutReader struct {
 	r       io.Reader
+	closer  io.Closer
 	timeout time.Duration
 	ctx     context.Context
+	stop    func() bool
 }
 
-func newTimeoutReader(r io.Reader, timeout time.Duration, ctx context.Context) *timeoutReader {
-	return &timeoutReader{r: r, timeout: timeout, ctx: ctx}
+func newTimeoutReader(body io.ReadCloser, timeout time.Duration, ctx context.Context) *timeoutReader {
+	tr := &timeoutReader{r: body, closer: body, timeout: timeout, ctx: ctx}
+	// context.AfterFunc runs body.Close() when ctx is cancelled, which unblocks
+	// the goroutine in Read() below that is stuck in body.Read. AfterFunc is
+	// stopped on the final Read returning an error / on Stop(), so a normal
+	// EOF does not trigger a spurious Close (the deferred resp.Body.Close in
+	// runDownload handles the normal path).
+	tr.stop = context.AfterFunc(ctx, func() {
+		_ = body.Close()
+	})
+	return tr
+}
+
+// Stop unregisters the AfterFunc hook. runDownload does NOT need to call this
+// (the GC + the deferred resp.Body.Close handle cleanup), but it is available
+// so a future caller can detach early.
+func (t *timeoutReader) Stop() {
+	if t.stop != nil {
+		t.stop()
+	}
 }
 
 func (t *timeoutReader) Read(p []byte) (int, error) {
@@ -679,10 +731,17 @@ func (t *timeoutReader) Read(p []byte) (int, error) {
 	case res := <-resultCh:
 		return res.n, res.err
 	case <-timer.C:
-		// Best-effort: signal the goroutine to give up. The underlying body's
-		// Close (deferred by the caller) reclaims its resources.
+		// Stall: best-effort close the body to nudge the inner Read toward
+		// returning. The inner goroutine's send is on a buffered (size 1)
+		// channel, so it never blocks even if we return here without receiving.
+		_ = t.closer.Close()
 		return 0, fmt.Errorf("download stalled: no data for %s", t.timeout)
 	case <-t.ctx.Done():
+		// Cancellation: the AfterFunc registered in newTimeoutReader closes the
+		// body, which unblocks the inner Read. Do NOT drain resultCh here —
+		// draining would block until the inner Read actually returns, which
+		// defeats the point of cancelling. The buffered resultCh lets the inner
+		// goroutine exit without a receiver (CodeRabbit review of PR #41).
 		return 0, fmt.Errorf("download cancelled: %w", t.ctx.Err())
 	}
 }

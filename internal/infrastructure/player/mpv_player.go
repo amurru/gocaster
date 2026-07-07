@@ -108,6 +108,11 @@ func (p *MPVPlayer) Play(ctx context.Context, source string) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// Re-check after acquiring the lock: cancellation may have arrived while
+	// we were waiting for it (CodeRabbit review of PR #41).
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if p.mpv == nil {
 		return errors.New("libmpv not available")
@@ -139,6 +144,9 @@ func (p *MPVPlayer) Stop(ctx context.Context) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if p.mpv == nil {
 		return nil
@@ -156,6 +164,10 @@ func (p *MPVPlayer) IsPlaying(ctx context.Context) bool {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// Re-check after acquiring the lock (CodeRabbit review of PR #41).
+	if ctx.Err() != nil {
+		return false
+	}
 
 	if p.mpv == nil || p.source == "" {
 		return false
@@ -172,6 +184,9 @@ func (p *MPVPlayer) Pause(ctx context.Context) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if p.mpv == nil {
 		return errors.New("libmpv not available")
@@ -190,6 +205,9 @@ func (p *MPVPlayer) Resume(ctx context.Context) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if p.mpv == nil {
 		return errors.New("libmpv not available")
@@ -208,6 +226,9 @@ func (p *MPVPlayer) TogglePause(ctx context.Context) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if p.mpv == nil {
 		return errors.New("libmpv not available")
@@ -233,6 +254,9 @@ func (p *MPVPlayer) Seek(ctx context.Context, seconds float64) error {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if p.mpv == nil {
 		return errors.New("libmpv not available")
@@ -251,6 +275,10 @@ func (p *MPVPlayer) Status(ctx context.Context) (domain.PlaybackStatus, error) {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// Re-check after acquiring the lock (CodeRabbit review of PR #41).
+	if err := ctx.Err(); err != nil {
+		return domain.PlaybackStatus{State: domain.PlaybackStateError, LastError: err.Error()}, err
+	}
 
 	if p.mpv == nil {
 		return domain.PlaybackStatus{
