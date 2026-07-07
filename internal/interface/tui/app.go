@@ -47,10 +47,6 @@ const (
 )
 
 // Messages represent events coming back to the UI.
-type errMsg struct {
-	err error
-}
-
 type podcastsLoadedMsg struct {
 	podcasts []domain.Podcast
 	err      error
@@ -905,10 +901,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.setStatus("Settings saved", "success")
 		return m, tea.Batch(cmds...)
 
-	case errMsg:
-		m.setStatus(msg.err.Error(), "error")
-		return m, tea.Batch(cmds...)
-
 	case downloadQueuedMsg:
 		if msg.err != nil {
 			m.setStatus(fmt.Sprintf("Download queue failed: %v", msg.err), "error")
@@ -1756,7 +1748,6 @@ func (m Model) renderHelpPage() string {
 	subtitle := m.theme.MutedText.Render("How to use Gocaster and navigate the interface.")
 	panel := m.theme.PanelFocused.Width(max(m.contentWidth()-4, 20))
 
-	// TODO: add app logo
 	return panel.Render(lipgloss.JoinVertical(lipgloss.Left,
 		title,
 		subtitle,
@@ -2460,20 +2451,6 @@ func valueOrPlaceholder(value string) string {
 		return "(not set)"
 	}
 	return value
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
 
 func (m Model) contentWidth() int {
