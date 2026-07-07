@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strconv"
 	"time"
 
@@ -138,6 +139,11 @@ type Model struct {
 	podcastService  *application.PodcastService
 	downloadService *application.DownloadService
 	playerService   *application.PlayerService
+	// ctx is the application root context. It is cancelled on shutdown so every
+	// in-flight service call (and the downloads it parents) observes
+	// cancellation (issue #11). tea.Cmd closures capture it via the Model value
+	// they close over.
+	ctx context.Context
 
 	state         viewState
 	keys          keyMap
@@ -196,6 +202,7 @@ type Model struct {
 }
 
 func NewModel(
+	ctx context.Context,
 	svc *application.PodcastService,
 	dsvc *application.DownloadService,
 	psvc *application.PlayerService,
@@ -203,6 +210,9 @@ func NewModel(
 	saveSettings func(Settings) error,
 	customThemesDir string,
 ) Model {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if settings.PeriodicSyncMins <= 0 {
 		settings.PeriodicSyncMins = 60
 	}
@@ -296,6 +306,7 @@ func NewModel(
 		podcastService:  svc,
 		downloadService: dsvc,
 		playerService:   psvc,
+		ctx:             ctx,
 		state:           stateBrowse,
 		keys:            defaultKeyMap(),
 		theme:           theme,

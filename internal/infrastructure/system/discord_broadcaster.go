@@ -1,6 +1,7 @@
 package system
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -31,6 +32,7 @@ func NewDiscordBroadcaster(clientID string) (domain.PlaybackBroadcaster, error) 
 }
 
 func (b *discordBroadcaster) PublishState(
+	ctx context.Context,
 	state domain.PlaybackState,
 	metadata domain.PlaybackMetadata,
 ) error {
@@ -47,13 +49,13 @@ func (b *discordBroadcaster) PublishState(
 	}
 
 	if state == domain.PlaybackStateStopped || state == domain.PlaybackStateError {
-		return b.clearActivityLocked()
+		return b.clearActivityLocked(ctx)
 	}
 
-	return b.publishActivityLocked()
+	return b.publishActivityLocked(ctx)
 }
 
-func (b *discordBroadcaster) PublishPosition(positionSec float64, durationSec float64) error {
+func (b *discordBroadcaster) PublishPosition(ctx context.Context, positionSec float64, durationSec float64) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -65,10 +67,15 @@ func (b *discordBroadcaster) PublishPosition(positionSec float64, durationSec fl
 	if b.state != domain.PlaybackStatePlaying {
 		return nil
 	}
-	return b.publishActivityLocked()
+	return b.publishActivityLocked(ctx)
 }
 
-func (b *discordBroadcaster) Close() error {
+func (b *discordBroadcaster) Close(ctx context.Context) error {
+	// Shutdown is unconditional: a cancelled context must not skip Logout(),
+	// otherwise the Discord IPC connection leaks. ctx is kept for interface
+	// conformance and future tracing (issue #11).
+	_ = ctx
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
@@ -79,9 +86,12 @@ func (b *discordBroadcaster) Close() error {
 	return nil
 }
 
-func (b *discordBroadcaster) SetController(controller domain.PlaybackController) {}
+func (b *discordBroadcaster) SetController(ctx context.Context, controller domain.PlaybackController) {}
 
-func (b *discordBroadcaster) ensureLoggedInLocked() error {
+func (b *discordBroadcaster) ensureLoggedInLocked(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if b.loggedIn {
 		return nil
 	}
@@ -92,7 +102,10 @@ func (b *discordBroadcaster) ensureLoggedInLocked() error {
 	return nil
 }
 
-func (b *discordBroadcaster) clearActivityLocked() error {
+func (b *discordBroadcaster) clearActivityLocked(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if !b.loggedIn {
 		return nil
 	}
@@ -104,8 +117,11 @@ func (b *discordBroadcaster) clearActivityLocked() error {
 	return nil
 }
 
-func (b *discordBroadcaster) publishActivityLocked() error {
-	if err := b.ensureLoggedInLocked(); err != nil {
+func (b *discordBroadcaster) publishActivityLocked(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := b.ensureLoggedInLocked(ctx); err != nil {
 		return err
 	}
 

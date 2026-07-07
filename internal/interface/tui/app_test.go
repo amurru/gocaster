@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"testing"
@@ -21,7 +22,7 @@ type tuiMockFeedParser struct {
 	err      error
 }
 
-func (m tuiMockFeedParser) Parse(string) (*domain.Podcast, []domain.Episode, error) {
+func (m tuiMockFeedParser) Parse(context.Context, string) (*domain.Podcast, []domain.Episode, error) {
 	return m.podcast, m.episodes, m.err
 }
 
@@ -32,31 +33,31 @@ type tuiMockPlayer struct {
 	seekCalls   []float64
 }
 
-func (m *tuiMockPlayer) Play(source string) error {
+func (m *tuiMockPlayer) Play(ctx context.Context, source string) error {
 	m.status.Source = source
 	m.status.State = domain.PlaybackStatePlaying
 	return m.playErr
 }
 
-func (m *tuiMockPlayer) Stop() error {
+func (m *tuiMockPlayer) Stop(ctx context.Context) error {
 	return nil
 }
 
-func (m *tuiMockPlayer) IsPlaying() bool {
+func (m *tuiMockPlayer) IsPlaying(ctx context.Context) bool {
 	return false
 }
 
-func (m *tuiMockPlayer) Pause() error {
+func (m *tuiMockPlayer) Pause(ctx context.Context) error {
 	m.status.State = domain.PlaybackStatePaused
 	return nil
 }
 
-func (m *tuiMockPlayer) Resume() error {
+func (m *tuiMockPlayer) Resume(ctx context.Context) error {
 	m.status.State = domain.PlaybackStatePlaying
 	return nil
 }
 
-func (m *tuiMockPlayer) TogglePause() error {
+func (m *tuiMockPlayer) TogglePause(ctx context.Context) error {
 	m.toggleCount++
 	if m.status.State == domain.PlaybackStatePaused {
 		m.status.State = domain.PlaybackStatePlaying
@@ -66,17 +67,17 @@ func (m *tuiMockPlayer) TogglePause() error {
 	return nil
 }
 
-func (m *tuiMockPlayer) Seek(seconds float64) error {
+func (m *tuiMockPlayer) Seek(ctx context.Context, seconds float64) error {
 	m.seekCalls = append(m.seekCalls, seconds)
 	m.status.PositionSec += seconds
 	return nil
 }
 
-func (m *tuiMockPlayer) Status() (domain.PlaybackStatus, error) {
+func (m *tuiMockPlayer) Status(ctx context.Context) (domain.PlaybackStatus, error) {
 	return m.status, nil
 }
 
-func (m *tuiMockPlayer) Close() error {
+func (m *tuiMockPlayer) Close(ctx context.Context) error {
 	return nil
 }
 
@@ -95,7 +96,7 @@ func newTestModel(t *testing.T) Model {
 	playerService := application.NewPlayerService(repo, repo, mockPlayer, nil, nil)
 	settings := Settings{PeriodicSyncMins: 60}
 	save := func(Settings) error { return nil }
-	return NewModel(podcastService, downloadService, playerService, settings, save, "")
+	return NewModel(context.Background(), podcastService, downloadService, playerService, settings, save, "")
 }
 
 func newPlayerTestModel(t *testing.T) (Model, *tuiMockPlayer, domain.Podcast, domain.Episode) {
@@ -113,7 +114,7 @@ func newPlayerTestModel(t *testing.T) (Model, *tuiMockPlayer, domain.Podcast, do
 	playerService := application.NewPlayerService(repo, repo, mockPlayer, nil, nil)
 	settings := Settings{PeriodicSyncMins: 60}
 	save := func(Settings) error { return nil }
-	model := NewModel(podcastService, downloadService, playerService, settings, save, "")
+	model := NewModel(context.Background(), podcastService, downloadService, playerService, settings, save, "")
 
 	podcast := domain.Podcast{
 		ID:          7,
@@ -922,11 +923,11 @@ func TestModelDownloadJobsShowEpisodeTitles(t *testing.T) {
 	podcastService := application.NewPodcastService(repo, repo, tuiMockFeedParser{}, nil)
 	downloadService := application.NewDownloadService(repo, repo, repo, "downloads", nil)
 	playerService := application.NewPlayerService(repo, repo, &tuiMockPlayer{}, nil, nil)
-	model := NewModel(podcastService, downloadService, playerService, Settings{PeriodicSyncMins: 60}, func(Settings) error { return nil }, "")
+	model := NewModel(context.Background(), podcastService, downloadService, playerService, Settings{PeriodicSyncMins: 60}, func(Settings) error { return nil }, "")
 
 	// Seed a podcast + episode + queued download job.
 	podcast := &domain.Podcast{Title: "Test Pod", FeedURL: "https://example.com/p.xml"}
-	if err := repo.Save(podcast); err != nil {
+	if err := repo.Save(context.Background(), podcast); err != nil {
 		t.Fatalf("Save podcast: %v", err)
 	}
 	episode := &domain.Episode{
@@ -934,16 +935,16 @@ func TestModelDownloadJobsShowEpisodeTitles(t *testing.T) {
 		Title:     "My Cool Episode",
 		AudioURL:  "https://example.com/ep.mp3",
 	}
-	if err := repo.SaveEpisode(episode); err != nil {
+	if err := repo.SaveEpisode(context.Background(), episode); err != nil {
 		t.Fatalf("SaveEpisode: %v", err)
 	}
 	job := &domain.DownloadJob{EpisodeID: episode.ID, Status: domain.DownloadStatusQueued}
-	if err := repo.SaveDownloadJob(job); err != nil {
+	if err := repo.SaveDownloadJob(context.Background(), job); err != nil {
 		t.Fatalf("SaveDownloadJob: %v", err)
 	}
 
 	// Resolve the title via the service to confirm the enrichment works.
-	views, err := downloadService.ListJobsWithEpisodes()
+	views, err := downloadService.ListJobsWithEpisodes(context.Background())
 	if err != nil {
 		t.Fatalf("ListJobsWithEpisodes: %v", err)
 	}

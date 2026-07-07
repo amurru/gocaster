@@ -1,6 +1,7 @@
 package application
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -16,7 +17,7 @@ type mockFeedParser struct {
 	err      error
 }
 
-func (m mockFeedParser) Parse(string) (*domain.Podcast, []domain.Episode, error) {
+func (m mockFeedParser) Parse(context.Context, string) (*domain.Podcast, []domain.Episode, error) {
 	return m.podcast, m.episodes, m.err
 }
 
@@ -30,7 +31,7 @@ type mockFeedParserByURL struct {
 	responses map[string]mockFeedParserResponse
 }
 
-func (m mockFeedParserByURL) Parse(url string) (*domain.Podcast, []domain.Episode, error) {
+func (m mockFeedParserByURL) Parse(_ context.Context, url string) (*domain.Podcast, []domain.Episode, error) {
 	resp, ok := m.responses[url]
 	if !ok {
 		return nil, nil, nil
@@ -39,6 +40,7 @@ func (m mockFeedParserByURL) Parse(url string) (*domain.Podcast, []domain.Episod
 }
 
 func TestPodcastService_AddPodcastPersistsEpisodes(t *testing.T) {
+	ctx := context.Background()
 	repo, err := persistence.NewSQLiteRepo(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -68,7 +70,7 @@ func TestPodcastService_AddPodcastPersistsEpisodes(t *testing.T) {
 	}
 	service := NewPodcastService(repo, repo, fetcher, nil)
 
-	podcast, err := service.AddPodcast("https://example.com/feed.xml")
+	podcast, err := service.AddPodcast(ctx, "https://example.com/feed.xml")
 	if err != nil {
 		t.Fatalf("AddPodcast failed: %v", err)
 	}
@@ -77,7 +79,7 @@ func TestPodcastService_AddPodcastPersistsEpisodes(t *testing.T) {
 		t.Fatal("expected podcast ID to be assigned")
 	}
 
-	episodes, err := repo.FindEpisodesByPodcastID(podcast.ID)
+	episodes, err := repo.FindEpisodesByPodcastID(ctx, podcast.ID)
 	if err != nil {
 		t.Fatalf("FindEpisodesByPodcastID failed: %v", err)
 	}
@@ -94,6 +96,7 @@ func TestPodcastService_AddPodcastPersistsEpisodes(t *testing.T) {
 }
 
 func TestPodcastService_ListEpisodes(t *testing.T) {
+	ctx := context.Background()
 	repo, err := persistence.NewSQLiteRepo(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +104,7 @@ func TestPodcastService_ListEpisodes(t *testing.T) {
 	defer repo.Close()
 
 	podcast := &domain.Podcast{Title: "Test", FeedURL: "https://example.com/feed.xml"}
-	if err := repo.Save(podcast); err != nil {
+	if err := repo.Save(ctx, podcast); err != nil {
 		t.Fatalf("Save failed: %v", err)
 	}
 
@@ -111,13 +114,13 @@ func TestPodcastService_ListEpisodes(t *testing.T) {
 		AudioURL:    "https://example.com/1.mp3",
 		PublishedAt: time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC),
 	}
-	if err := repo.SaveEpisode(episode); err != nil {
+	if err := repo.SaveEpisode(ctx, episode); err != nil {
 		t.Fatalf("SaveEpisode failed: %v", err)
 	}
 
 	service := NewPodcastService(repo, repo, mockFeedParser{}, nil)
 
-	episodes, err := service.ListEpisodes(podcast.ID)
+	episodes, err := service.ListEpisodes(ctx, podcast.ID)
 	if err != nil {
 		t.Fatalf("ListEpisodes failed: %v", err)
 	}
@@ -132,6 +135,7 @@ func TestPodcastService_ListEpisodes(t *testing.T) {
 }
 
 func TestPodcastService_RefreshPodcastAddsOnlyNewEpisodes(t *testing.T) {
+	ctx := context.Background()
 	repo, err := persistence.NewSQLiteRepo(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -139,7 +143,7 @@ func TestPodcastService_RefreshPodcastAddsOnlyNewEpisodes(t *testing.T) {
 	defer repo.Close()
 
 	podcast := &domain.Podcast{Title: "Test", FeedURL: "https://example.com/feed.xml"}
-	if err := repo.Save(podcast); err != nil {
+	if err := repo.Save(ctx, podcast); err != nil {
 		t.Fatalf("Save failed: %v", err)
 	}
 
@@ -149,7 +153,7 @@ func TestPodcastService_RefreshPodcastAddsOnlyNewEpisodes(t *testing.T) {
 		AudioURL:    "https://example.com/old.mp3",
 		PublishedAt: time.Date(2026, 4, 15, 12, 0, 0, 0, time.UTC),
 	}
-	if err := repo.SaveEpisode(existing); err != nil {
+	if err := repo.SaveEpisode(ctx, existing); err != nil {
 		t.Fatalf("SaveEpisode failed: %v", err)
 	}
 
@@ -178,7 +182,7 @@ func TestPodcastService_RefreshPodcastAddsOnlyNewEpisodes(t *testing.T) {
 	}
 	service := NewPodcastService(repo, repo, fetcher, nil)
 
-	newCount, err := service.RefreshPodcast(podcast.ID)
+	newCount, err := service.RefreshPodcast(ctx, podcast.ID)
 	if err != nil {
 		t.Fatalf("RefreshPodcast failed: %v", err)
 	}
@@ -187,7 +191,7 @@ func TestPodcastService_RefreshPodcastAddsOnlyNewEpisodes(t *testing.T) {
 		t.Fatalf("expected 2 new episodes, got %d", newCount)
 	}
 
-	stored, err := repo.FindEpisodesByPodcastID(podcast.ID)
+	stored, err := repo.FindEpisodesByPodcastID(ctx, podcast.ID)
 	if err != nil {
 		t.Fatalf("FindEpisodesByPodcastID failed: %v", err)
 	}
@@ -198,6 +202,7 @@ func TestPodcastService_RefreshPodcastAddsOnlyNewEpisodes(t *testing.T) {
 }
 
 func TestPodcastService_RefreshAllPodcastsAggregatesResults(t *testing.T) {
+	ctx := context.Background()
 	repo, err := persistence.NewSQLiteRepo(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -206,14 +211,14 @@ func TestPodcastService_RefreshAllPodcastsAggregatesResults(t *testing.T) {
 
 	first := &domain.Podcast{Title: "One", FeedURL: "https://example.com/one.xml"}
 	second := &domain.Podcast{Title: "Two", FeedURL: "https://example.com/two.xml"}
-	if err := repo.Save(first); err != nil {
+	if err := repo.Save(ctx, first); err != nil {
 		t.Fatalf("Save first podcast failed: %v", err)
 	}
-	if err := repo.Save(second); err != nil {
+	if err := repo.Save(ctx, second); err != nil {
 		t.Fatalf("Save second podcast failed: %v", err)
 	}
 
-	if err := repo.SaveEpisode(&domain.Episode{
+	if err := repo.SaveEpisode(ctx, &domain.Episode{
 		PodcastID:   first.ID,
 		Title:       "Existing",
 		AudioURL:    "https://example.com/existing.mp3",
@@ -238,7 +243,7 @@ func TestPodcastService_RefreshAllPodcastsAggregatesResults(t *testing.T) {
 	}
 
 	service := NewPodcastService(repo, repo, parser, nil)
-	result, err := service.RefreshAllPodcasts()
+	result, err := service.RefreshAllPodcasts(ctx)
 	if err != nil {
 		t.Fatalf("RefreshAllPodcasts failed: %v", err)
 	}

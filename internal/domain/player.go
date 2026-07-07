@@ -1,5 +1,7 @@
 package domain
 
+import "context"
+
 type PlaybackState string
 
 const (
@@ -19,20 +21,29 @@ type PlaybackStatus struct {
 	LastError   string
 }
 
+// Player is the audio playback port. Every method takes a context.Context so
+// the caller can cancel in-flight operations, set deadlines, and propagate
+// request-scoped tracing (issue #11).
+//
+// Note on Close: it is a cleanup operation, NOT a cancellable one. Close(ctx)
+// must still release resources when ctx is already cancelled — the
+// composition root cancels the root context before calling Close during
+// shutdown — so implementations must not gate the release on ctx.Err(); use
+// ctx only for tracing or bounded waits.
 type Player interface {
-	Play(source string) error
-	Stop() error
-	IsPlaying() bool
+	Play(ctx context.Context, source string) error
+	Stop(ctx context.Context) error
+	IsPlaying(ctx context.Context) bool
 
-	Pause() error
-	Resume() error
-	TogglePause() error
+	Pause(ctx context.Context) error
+	Resume(ctx context.Context) error
+	TogglePause(ctx context.Context) error
 
-	Seek(seconds float64) error
+	Seek(ctx context.Context, seconds float64) error
 
-	Status() (PlaybackStatus, error)
+	Status(ctx context.Context) (PlaybackStatus, error)
 
-	Close() error
+	Close(ctx context.Context) error
 }
 
 type PlaybackMetadata struct {
@@ -46,20 +57,31 @@ type PlaybackMetadata struct {
 	CanGoPrevious bool
 }
 
+// PlaybackController is the inbound control surface exposed to broadcasters
+// (e.g. MPRIS media keys). Every method takes a context.Context so external
+// callers are bound by the same cancellation/deadline semantics as the TUI
+// (issue #11).
 type PlaybackController interface {
-	Play(episodeID int64) error
-	Pause() error
-	Resume() error
-	PlayPause() error
-	Stop() error
-	SeekTo(positionSec float64) error
-	Status() (PlaybackStatus, error)
+	Play(ctx context.Context, episodeID int64) error
+	Pause(ctx context.Context) error
+	Resume(ctx context.Context) error
+	PlayPause(ctx context.Context) error
+	Stop(ctx context.Context) error
+	SeekTo(ctx context.Context, positionSec float64) error
+	Status(ctx context.Context) (PlaybackStatus, error)
 }
 
+// PlaybackBroadcaster fans playback state out to external surfaces (MPRIS,
+// Discord). Every method takes a context.Context so publishes can be cancelled
+// on shutdown (issue #11).
+//
+// As with Player.Close, Close(ctx) is a cleanup operation and must still
+// release broadcaster resources when ctx is already cancelled (callers cancel
+// the root context before shutdown).
 type PlaybackBroadcaster interface {
-	PublishState(state PlaybackState, metadata PlaybackMetadata) error
-	PublishPosition(positionSec float64, durationSec float64) error
-	Close() error
+	PublishState(ctx context.Context, state PlaybackState, metadata PlaybackMetadata) error
+	PublishPosition(ctx context.Context, positionSec float64, durationSec float64) error
+	Close(ctx context.Context) error
 
-	SetController(controller PlaybackController)
+	SetController(ctx context.Context, controller PlaybackController)
 }

@@ -1,6 +1,7 @@
 package application
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sync"
@@ -38,26 +39,26 @@ func NewPlayerService(episodes domain.EpisodeRepo, podcasts domain.PodcastRepo, 
 	}
 
 	if broadcaster != nil {
-		broadcaster.SetController(svc)
+		broadcaster.SetController(context.Background(), svc)
 	}
 
 	return svc
 }
 
-func (s *PlayerService) PlayEpisode(episodeID int64) error {
-	episode, err := s.episodes.FindEpisodeByID(episodeID)
+func (s *PlayerService) PlayEpisode(ctx context.Context, episodeID int64) error {
+	episode, err := s.episodes.FindEpisodeByID(ctx, episodeID)
 	if err != nil {
 		return fmt.Errorf("could not find episode: %w", err)
 	}
 
-	podcast, err := s.podcasts.FindByID(episode.PodcastID)
+	podcast, err := s.podcasts.FindByID(ctx, episode.PodcastID)
 	if err != nil {
 		return fmt.Errorf("could not find podcast: %w", err)
 	}
 
 	source := resolvePlaybackSource(*episode)
 
-	if err := s.player.Play(source); err != nil {
+	if err := s.player.Play(ctx, source); err != nil {
 		return fmt.Errorf("player failed: %w", err)
 	}
 
@@ -67,11 +68,11 @@ func (s *PlayerService) PlayEpisode(episodeID int64) error {
 	s.lastEpisodeID = episodeID
 	s.mu.Unlock()
 
-	s.broadcastState()
+	s.broadcastState(ctx)
 
 	if !episode.IsPlayed {
 		episode.IsPlayed = true
-		if err := s.episodes.UpdateEpisodePlaybackState(episode.ID, true); err != nil {
+		if err := s.episodes.UpdateEpisodePlaybackState(ctx, episode.ID, true); err != nil {
 			s.logger.Warn("failed to mark episode as played", "episode_id", episode.ID, "err", err)
 		}
 	}
@@ -88,8 +89,8 @@ func resolvePlaybackSource(episode domain.Episode) string {
 	return episode.AudioURL
 }
 
-func (s *PlayerService) StopPlayback() error {
-	if err := s.player.Stop(); err != nil {
+func (s *PlayerService) StopPlayback(ctx context.Context) error {
+	if err := s.player.Stop(ctx); err != nil {
 		return err
 	}
 
@@ -98,61 +99,61 @@ func (s *PlayerService) StopPlayback() error {
 	s.currentPodcast = nil
 	s.mu.Unlock()
 
-	s.broadcastState()
+	s.broadcastState(ctx)
 	return nil
 }
 
-func (s *PlayerService) TogglePlayPause() error {
-	if err := s.player.TogglePause(); err != nil {
+func (s *PlayerService) TogglePlayPause(ctx context.Context) error {
+	if err := s.player.TogglePause(ctx); err != nil {
 		return err
 	}
 
-	s.broadcastState()
+	s.broadcastState(ctx)
 	return nil
 }
 
-func (s *PlayerService) Pause() error {
-	if err := s.player.Pause(); err != nil {
+func (s *PlayerService) Pause(ctx context.Context) error {
+	if err := s.player.Pause(ctx); err != nil {
 		return err
 	}
 
-	s.broadcastState()
+	s.broadcastState(ctx)
 	return nil
 }
 
-func (s *PlayerService) Resume() error {
-	if err := s.player.Resume(); err != nil {
+func (s *PlayerService) Resume(ctx context.Context) error {
+	if err := s.player.Resume(ctx); err != nil {
 		return err
 	}
 
-	s.broadcastState()
+	s.broadcastState(ctx)
 	return nil
 }
 
-func (s *PlayerService) Seek(seconds float64) error {
-	return s.player.Seek(seconds)
+func (s *PlayerService) Seek(ctx context.Context, seconds float64) error {
+	return s.player.Seek(ctx, seconds)
 }
 
-func (s *PlayerService) SeekTo(seconds float64) error {
-	return s.player.Seek(seconds)
+func (s *PlayerService) SeekTo(ctx context.Context, seconds float64) error {
+	return s.player.Seek(ctx, seconds)
 }
 
-func (s *PlayerService) Status() (domain.PlaybackStatus, error) {
-	return s.player.Status()
+func (s *PlayerService) Status(ctx context.Context) (domain.PlaybackStatus, error) {
+	return s.player.Status(ctx)
 }
 
-func (s *PlayerService) PlaybackStatus() (domain.PlaybackStatus, error) {
-	return s.Status()
+func (s *PlayerService) PlaybackStatus(ctx context.Context) (domain.PlaybackStatus, error) {
+	return s.Status(ctx)
 }
 
-func (s *PlayerService) Close() error {
+func (s *PlayerService) Close(ctx context.Context) error {
 	if s.broadcaster != nil {
-		s.broadcaster.Close()
+		s.broadcaster.Close(ctx)
 	}
-	return s.player.Close()
+	return s.player.Close(ctx)
 }
 
-func (s *PlayerService) broadcastState() {
+func (s *PlayerService) broadcastState(ctx context.Context) {
 	if s.broadcaster == nil {
 		return
 	}
@@ -162,7 +163,7 @@ func (s *PlayerService) broadcastState() {
 	podcast := s.currentPodcast
 	s.mu.RUnlock()
 
-	status, err := s.player.Status()
+	status, err := s.player.Status(ctx)
 	if err != nil {
 		return
 	}
@@ -185,10 +186,10 @@ func (s *PlayerService) broadcastState() {
 		metadata.PodcastTitle = podcast.Title
 	}
 
-	_ = s.broadcaster.PublishState(status.State, metadata)
+	_ = s.broadcaster.PublishState(ctx, status.State, metadata)
 }
 
-func (s *PlayerService) Play(episodeID int64) error {
+func (s *PlayerService) Play(ctx context.Context, episodeID int64) error {
 	if episodeID == 0 {
 		s.mu.Lock()
 		episodeID = s.lastEpisodeID
@@ -199,13 +200,13 @@ func (s *PlayerService) Play(episodeID int64) error {
 		}
 	}
 
-	return s.PlayEpisode(episodeID)
+	return s.PlayEpisode(ctx, episodeID)
 }
 
-func (s *PlayerService) PlayPause() error {
-	return s.TogglePlayPause()
+func (s *PlayerService) PlayPause(ctx context.Context) error {
+	return s.TogglePlayPause(ctx)
 }
 
-func (s *PlayerService) Stop() error {
-	return s.StopPlayback()
+func (s *PlayerService) Stop(ctx context.Context) error {
+	return s.StopPlayback(ctx)
 }

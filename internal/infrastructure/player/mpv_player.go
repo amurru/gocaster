@@ -1,6 +1,7 @@
 package player
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -100,9 +101,18 @@ func (p *MPVPlayer) initMPV() {
 	p.debug("mpv initialized successfully")
 }
 
-func (p *MPVPlayer) Play(source string) error {
+func (p *MPVPlayer) Play(ctx context.Context, source string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// Re-check after acquiring the lock: cancellation may have arrived while
+	// we were waiting for it (CodeRabbit review of PR #41).
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if p.mpv == nil {
 		return errors.New("libmpv not available")
@@ -127,9 +137,16 @@ func (p *MPVPlayer) Play(source string) error {
 	return nil
 }
 
-func (p *MPVPlayer) Stop() error {
+func (p *MPVPlayer) Stop(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if p.mpv == nil {
 		return nil
@@ -140,9 +157,17 @@ func (p *MPVPlayer) Stop() error {
 	return nil
 }
 
-func (p *MPVPlayer) IsPlaying() bool {
+func (p *MPVPlayer) IsPlaying(ctx context.Context) bool {
+	if ctx.Err() != nil {
+		return false
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// Re-check after acquiring the lock (CodeRabbit review of PR #41).
+	if ctx.Err() != nil {
+		return false
+	}
 
 	if p.mpv == nil || p.source == "" {
 		return false
@@ -152,9 +177,16 @@ func (p *MPVPlayer) IsPlaying() bool {
 	return pause != "yes"
 }
 
-func (p *MPVPlayer) Pause() error {
+func (p *MPVPlayer) Pause(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if p.mpv == nil {
 		return errors.New("libmpv not available")
@@ -166,9 +198,16 @@ func (p *MPVPlayer) Pause() error {
 	return nil
 }
 
-func (p *MPVPlayer) Resume() error {
+func (p *MPVPlayer) Resume(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if p.mpv == nil {
 		return errors.New("libmpv not available")
@@ -180,9 +219,16 @@ func (p *MPVPlayer) Resume() error {
 	return nil
 }
 
-func (p *MPVPlayer) TogglePause() error {
+func (p *MPVPlayer) TogglePause(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if p.mpv == nil {
 		return errors.New("libmpv not available")
@@ -201,9 +247,16 @@ func (p *MPVPlayer) TogglePause() error {
 	return nil
 }
 
-func (p *MPVPlayer) Seek(seconds float64) error {
+func (p *MPVPlayer) Seek(ctx context.Context, seconds float64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 
 	if p.mpv == nil {
 		return errors.New("libmpv not available")
@@ -215,9 +268,17 @@ func (p *MPVPlayer) Seek(seconds float64) error {
 	return nil
 }
 
-func (p *MPVPlayer) Status() (domain.PlaybackStatus, error) {
+func (p *MPVPlayer) Status(ctx context.Context) (domain.PlaybackStatus, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.PlaybackStatus{State: domain.PlaybackStateError, LastError: err.Error()}, err
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	// Re-check after acquiring the lock (CodeRabbit review of PR #41).
+	if err := ctx.Err(); err != nil {
+		return domain.PlaybackStatus{State: domain.PlaybackStateError, LastError: err.Error()}, err
+	}
 
 	if p.mpv == nil {
 		return domain.PlaybackStatus{
@@ -279,7 +340,13 @@ func toFloat64(v any) float64 {
 	}
 }
 
-func (p *MPVPlayer) Close() error {
+func (p *MPVPlayer) Close(ctx context.Context) error {
+	// Shutdown is unconditional: a cancelled context must not prevent
+	// TerminateDestroy from running (otherwise the libmpv handle leaks), so we
+	// intentionally do not check ctx.Err() here. The ctx parameter is kept for
+	// interface conformance and future tracing (issue #11).
+	_ = ctx
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 

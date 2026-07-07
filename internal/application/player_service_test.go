@@ -1,6 +1,7 @@
 package application
 
 import (
+	"context"
 	"testing"
 
 	"github.com/amurru/gocaster/internal/domain"
@@ -13,22 +14,22 @@ type mockBroadcaster struct {
 	controller       domain.PlaybackController
 }
 
-func (m *mockBroadcaster) PublishState(state domain.PlaybackState, metadata domain.PlaybackMetadata) error {
+func (m *mockBroadcaster) PublishState(ctx context.Context, state domain.PlaybackState, metadata domain.PlaybackMetadata) error {
 	m.publishedState = state
 	m.publishedMeta = metadata
 	m.publishCallCount++
 	return nil
 }
 
-func (m *mockBroadcaster) PublishPosition(positionSec float64, durationSec float64) error {
+func (m *mockBroadcaster) PublishPosition(ctx context.Context, positionSec float64, durationSec float64) error {
 	return nil
 }
 
-func (m *mockBroadcaster) Close() error {
+func (m *mockBroadcaster) Close(ctx context.Context) error {
 	return nil
 }
 
-func (m *mockBroadcaster) SetController(controller domain.PlaybackController) {
+func (m *mockBroadcaster) SetController(ctx context.Context, controller domain.PlaybackController) {
 	m.controller = controller
 }
 
@@ -44,7 +45,7 @@ type mockPlayer struct {
 	paused       bool
 }
 
-func (m *mockPlayer) Play(source string) error {
+func (m *mockPlayer) Play(ctx context.Context, source string) error {
 	m.playCalled = true
 	m.source = source
 	m.isPlaying = true
@@ -52,7 +53,7 @@ func (m *mockPlayer) Play(source string) error {
 	return nil
 }
 
-func (m *mockPlayer) Stop() error {
+func (m *mockPlayer) Stop(ctx context.Context) error {
 	m.stopCalled = true
 	m.isPlaying = false
 	m.paused = false
@@ -60,34 +61,34 @@ func (m *mockPlayer) Stop() error {
 	return nil
 }
 
-func (m *mockPlayer) IsPlaying() bool {
+func (m *mockPlayer) IsPlaying(ctx context.Context) bool {
 	return m.isPlaying && !m.paused
 }
 
-func (m *mockPlayer) Pause() error {
+func (m *mockPlayer) Pause(ctx context.Context) error {
 	m.pauseCalled = true
 	m.paused = true
 	return nil
 }
 
-func (m *mockPlayer) Resume() error {
+func (m *mockPlayer) Resume(ctx context.Context) error {
 	m.resumeCalled = true
 	m.paused = false
 	return nil
 }
 
-func (m *mockPlayer) TogglePause() error {
+func (m *mockPlayer) TogglePause(ctx context.Context) error {
 	m.toggleCalled = true
 	m.paused = !m.paused
 	return nil
 }
 
-func (m *mockPlayer) Seek(seconds float64) error {
+func (m *mockPlayer) Seek(ctx context.Context, seconds float64) error {
 	m.seekCalled = true
 	return nil
 }
 
-func (m *mockPlayer) Status() (domain.PlaybackStatus, error) {
+func (m *mockPlayer) Status(ctx context.Context) (domain.PlaybackStatus, error) {
 	state := domain.PlaybackStateStopped
 	if m.isPlaying {
 		if m.paused {
@@ -105,7 +106,7 @@ func (m *mockPlayer) Status() (domain.PlaybackStatus, error) {
 	}, nil
 }
 
-func (m *mockPlayer) Close() error {
+func (m *mockPlayer) Close(ctx context.Context) error {
 	return nil
 }
 
@@ -117,36 +118,43 @@ type mockRepo struct {
 	podcasts map[int64]*domain.Podcast
 }
 
-func (m *mockRepo) FindEpisodeByID(id int64) (*domain.Episode, error) {
+func (m *mockRepo) FindEpisodeByID(ctx context.Context, id int64) (*domain.Episode, error) {
 	if ep, ok := m.episodes[id]; ok {
 		return ep, nil
 	}
 	return nil, nil
 }
 
-func (m *mockRepo) FindByID(id int64) (*domain.Podcast, error) {
+func (m *mockRepo) FindByID(ctx context.Context, id int64) (*domain.Podcast, error) {
 	if p, ok := m.podcasts[id]; ok {
 		return p, nil
 	}
 	return nil, nil
 }
 
-func (m *mockRepo) UpdateEpisodePlaybackState(id int64, isPlayed bool) error {
+func (m *mockRepo) UpdateEpisodePlaybackState(ctx context.Context, id int64, isPlayed bool) error {
 	if ep, ok := m.episodes[id]; ok {
 		ep.IsPlayed = isPlayed
 	}
 	return nil
 }
 
-func (m *mockRepo) Save(podcast *domain.Podcast) error                            { return nil }
-func (m *mockRepo) FindAll() ([]domain.Podcast, error)                            { return nil, nil }
-func (m *mockRepo) Delete(id int64) error                                         { return nil }
-func (m *mockRepo) SaveEpisode(episode *domain.Episode) error                     { return nil }
-func (m *mockRepo) FindEpisodesByPodcastID(id int64) ([]domain.Episode, error)    { return nil, nil }
-func (m *mockRepo) DeleteEpisode(id int64) error                                  { return nil }
-func (m *mockRepo) MarkEpisodeDownloaded(episodeID int64, localPath string) error { return nil }
+func (m *mockRepo) Save(ctx context.Context, podcast *domain.Podcast) error { return nil }
+func (m *mockRepo) FindAll(ctx context.Context) ([]domain.Podcast, error)    { return nil, nil }
+func (m *mockRepo) Delete(ctx context.Context, id int64) error               { return nil }
+func (m *mockRepo) SaveEpisode(ctx context.Context, episode *domain.Episode) error {
+	return nil
+}
+func (m *mockRepo) FindEpisodesByPodcastID(ctx context.Context, id int64) ([]domain.Episode, error) {
+	return nil, nil
+}
+func (m *mockRepo) DeleteEpisode(ctx context.Context, id int64) error { return nil }
+func (m *mockRepo) MarkEpisodeDownloaded(ctx context.Context, episodeID int64, localPath string) error {
+	return nil
+}
 
 func TestPlayerServiceBroadcastsOnPlay(t *testing.T) {
+	ctx := context.Background()
 	mp := &mockPlayer{}
 	mb := &mockBroadcaster{}
 	mr := &mockRepo{
@@ -160,7 +168,7 @@ func TestPlayerServiceBroadcastsOnPlay(t *testing.T) {
 
 	svc := NewPlayerService(mr, mr, mp, mb, nil)
 
-	err := svc.PlayEpisode(1)
+	err := svc.PlayEpisode(ctx, 1)
 	if err != nil {
 		t.Fatalf("PlayEpisode failed: %v", err)
 	}
@@ -179,13 +187,14 @@ func TestPlayerServiceBroadcastsOnPlay(t *testing.T) {
 }
 
 func TestPlayerServiceBroadcastsOnPause(t *testing.T) {
+	ctx := context.Background()
 	mp := &mockPlayer{isPlaying: true}
 	mb := &mockBroadcaster{}
 	mr := &mockRepo{}
 
 	svc := NewPlayerService(mr, mr, mp, mb, nil)
 
-	_ = svc.Pause()
+	_ = svc.Pause(ctx)
 
 	if mb.publishedState != domain.PlaybackStatePaused {
 		t.Errorf("expected state Paused, got %v", mb.publishedState)
@@ -193,13 +202,14 @@ func TestPlayerServiceBroadcastsOnPause(t *testing.T) {
 }
 
 func TestPlayerServiceBroadcastsOnStop(t *testing.T) {
+	ctx := context.Background()
 	mp := &mockPlayer{isPlaying: true}
 	mb := &mockBroadcaster{}
 	mr := &mockRepo{}
 
 	svc := NewPlayerService(mr, mr, mp, mb, nil)
 
-	_ = svc.StopPlayback()
+	_ = svc.StopPlayback(ctx)
 
 	if mb.publishedState != domain.PlaybackStateStopped {
 		t.Errorf("expected state Stopped, got %v", mb.publishedState)
@@ -207,6 +217,7 @@ func TestPlayerServiceBroadcastsOnStop(t *testing.T) {
 }
 
 func TestPlayerServiceReplaysLastEpisode(t *testing.T) {
+	ctx := context.Background()
 	mp := &mockPlayer{}
 	mb := &mockBroadcaster{}
 	mr := &mockRepo{
@@ -220,11 +231,11 @@ func TestPlayerServiceReplaysLastEpisode(t *testing.T) {
 
 	svc := NewPlayerService(mr, mr, mp, mb, nil)
 
-	_ = svc.PlayEpisode(1)
+	_ = svc.PlayEpisode(ctx, 1)
 
 	mp.playCalled = false
 
-	err := svc.Play(0)
+	err := svc.Play(ctx, 0)
 	if err != nil {
 		t.Fatalf("Play(0) failed: %v", err)
 	}
@@ -239,19 +250,21 @@ func TestPlayerServiceReplaysLastEpisode(t *testing.T) {
 }
 
 func TestPlayerServiceControllerPlaysLastWhenNonePlayed(t *testing.T) {
+	ctx := context.Background()
 	mp := &mockPlayer{}
 	mb := &mockBroadcaster{}
 	mr := &mockRepo{}
 
 	svc := NewPlayerService(mr, mr, mp, mb, nil)
 
-	err := svc.Play(0)
+	err := svc.Play(ctx, 0)
 	if err == nil {
 		t.Error("expected error when Play(0) with no last episode")
 	}
 }
 
 func TestPlayerServiceInboundControl(t *testing.T) {
+	ctx := context.Background()
 	mp := &mockPlayer{}
 	mb := &mockBroadcaster{}
 	mr := &mockRepo{
@@ -266,27 +279,27 @@ func TestPlayerServiceInboundControl(t *testing.T) {
 	svc := NewPlayerService(mr, mr, mp, mb, nil)
 	_ = svc
 
-	mb.controller.Play(1)
+	mb.controller.Play(ctx, 1)
 	if !mp.playCalled {
 		t.Error("expected player.Play to be called via inbound control")
 	}
 
-	mb.controller.Pause()
+	mb.controller.Pause(ctx)
 	if !mp.pauseCalled {
 		t.Error("expected player.Pause to be called via inbound control")
 	}
 
-	mb.controller.PlayPause()
+	mb.controller.PlayPause(ctx)
 	if !mp.toggleCalled {
 		t.Error("expected player.TogglePause to be called via inbound control")
 	}
 
-	mb.controller.Stop()
+	mb.controller.Stop(ctx)
 	if !mp.stopCalled {
 		t.Error("expected player.Stop to be called via inbound control")
 	}
 
-	mb.controller.SeekTo(60)
+	mb.controller.SeekTo(ctx, 60)
 	if !mp.seekCalled {
 		t.Error("expected player.Seek to be called via inbound control")
 	}

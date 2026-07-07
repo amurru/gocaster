@@ -3,6 +3,7 @@
 package system
 
 import (
+	"context"
 	"sync"
 	"testing"
 	"time"
@@ -23,13 +24,15 @@ func newStubController() *stubController {
 	return &stubController{block: make(chan struct{})}
 }
 
-func (s *stubController) Play(int64) error     { return nil }
-func (s *stubController) Pause() error         { return nil }
-func (s *stubController) Resume() error        { return nil }
-func (s *stubController) PlayPause() error     { return nil }
-func (s *stubController) Stop() error          { return nil }
-func (s *stubController) SeekTo(float64) error { return nil }
-func (s *stubController) Status() (domain.PlaybackStatus, error) {
+func (s *stubController) Play(context.Context, int64) error { return nil }
+func (s *stubController) Pause(context.Context) error       { return nil }
+func (s *stubController) Resume(context.Context) error      { return nil }
+func (s *stubController) PlayPause(context.Context) error   { return nil }
+func (s *stubController) Stop(context.Context) error        { return nil }
+func (s *stubController) SeekTo(context.Context, float64) error {
+	return nil
+}
+func (s *stubController) Status(context.Context) (domain.PlaybackStatus, error) {
 	// Hold until the test releases the blocker, simulating a slow player.
 	<-s.block
 	return domain.PlaybackStatus{State: domain.PlaybackStatePlaying}, nil
@@ -44,7 +47,7 @@ func newTestBroadcaster(ctrl domain.PlaybackController) *mprisBroadcaster {
 		done:    make(chan struct{}),
 		state:   domain.PlaybackStatePlaying,
 	}
-	b.SetController(ctrl)
+	b.SetController(context.Background(), ctrl)
 	b.wg.Add(1)
 	go b.positionUpdater()
 	return b
@@ -64,7 +67,7 @@ func TestMPRISBroadcaster_CloseWaitsForUpdater(t *testing.T) {
 
 	closeDone := make(chan error, 1)
 	go func() {
-		closeDone <- b.Close()
+		closeDone <- b.Close(context.Background())
 	}()
 
 	// Close should be blocked because the updater is mid-Status() and wg hasn't
@@ -104,10 +107,10 @@ func TestMPRISBroadcaster_CloseIdempotent(t *testing.T) {
 
 	close(ctrl.block) // let the updater proceed so Close can finish quickly
 
-	if err := b.Close(); err != nil {
+	if err := b.Close(context.Background()); err != nil {
 		t.Fatalf("first Close failed: %v", err)
 	}
-	if err := b.Close(); err != nil {
+	if err := b.Close(context.Background()); err != nil {
 		t.Fatalf("second Close failed: %v", err)
 	}
 }
@@ -118,14 +121,14 @@ func TestMPRISBroadcaster_PublishAfterCloseNoPanic(t *testing.T) {
 	ctrl := newStubController()
 	b := newTestBroadcaster(ctrl)
 	close(ctrl.block)
-	if err := b.Close(); err != nil {
+	if err := b.Close(context.Background()); err != nil {
 		t.Fatalf("Close failed: %v", err)
 	}
 	// These must not panic on the nilled conn.
-	if err := b.PublishState(domain.PlaybackStatePaused, domain.PlaybackMetadata{}); err != nil {
+	if err := b.PublishState(context.Background(), domain.PlaybackStatePaused, domain.PlaybackMetadata{}); err != nil {
 		t.Errorf("PublishState after Close: %v", err)
 	}
-	if err := b.PublishPosition(10, 100); err != nil {
+	if err := b.PublishPosition(context.Background(), 10, 100); err != nil {
 		t.Errorf("PublishPosition after Close: %v", err)
 	}
 }

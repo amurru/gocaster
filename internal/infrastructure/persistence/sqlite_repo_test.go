@@ -1,6 +1,7 @@
 package persistence
 
 import (
+	"context"
 	"database/sql"
 	"path/filepath"
 	"strings"
@@ -22,13 +23,14 @@ func TestNewSQLiteRepo_RunsMigrations(t *testing.T) {
 
 	// Verify we can query the schema by checking if a save operation works
 	testPodcast := &domain.Podcast{Title: "Test", FeedURL: "https://test.com/feed.xml"}
-	err = repo.Save(testPodcast)
+	err = repo.Save(context.Background(), testPodcast)
 	if err != nil {
 		t.Errorf("migrations not run, save failed: %v", err)
 	}
 }
 
 func TestSQLiteRepo_Save(t *testing.T) {
+	ctx := context.Background()
 	repo, err := NewSQLiteRepo(":memory:")
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +45,7 @@ func TestSQLiteRepo_Save(t *testing.T) {
 		LastUpdated: time.Now(),
 	}
 
-	err = repo.Save(podcast)
+	err = repo.Save(ctx, podcast)
 	if err != nil {
 		t.Fatalf("Save failed: %v", err)
 	}
@@ -54,17 +56,18 @@ func TestSQLiteRepo_Save(t *testing.T) {
 }
 
 func TestSQLiteRepo_FindAll(t *testing.T) {
+	ctx := context.Background()
 	repo, _ := NewSQLiteRepo(":memory:")
 	defer repo.Close()
 
 	// Setup: create test data
 	p1 := &domain.Podcast{Title: "Podcast 1", FeedURL: "https://example.com/feed1.xml"}
 	p2 := &domain.Podcast{Title: "Podcast 2", FeedURL: "https://example.com/feed2.xml"}
-	repo.Save(p1)
-	repo.Save(p2)
+	repo.Save(ctx, p1)
+	repo.Save(ctx, p2)
 
 	// Test
-	podcasts, err := repo.FindAll()
+	podcasts, err := repo.FindAll(ctx)
 	if err != nil {
 		t.Fatalf("FindAll failed: %v", err)
 	}
@@ -75,15 +78,16 @@ func TestSQLiteRepo_FindAll(t *testing.T) {
 }
 
 func TestSQLiteRepo_FindByID(t *testing.T) {
+	ctx := context.Background()
 	repo, _ := NewSQLiteRepo(":memory:")
 	defer repo.Close()
 
 	// Setup
 	p := &domain.Podcast{Title: "Test", FeedURL: "https://example.com/feed.xml"}
-	repo.Save(p)
+	repo.Save(ctx, p)
 
 	// Test - found
-	found, err := repo.FindByID(p.ID)
+	found, err := repo.FindByID(ctx, p.ID)
 	if err != nil {
 		t.Fatalf("FindByID failed: %v", err)
 	}
@@ -92,40 +96,42 @@ func TestSQLiteRepo_FindByID(t *testing.T) {
 	}
 
 	// Test - not found
-	_, err = repo.FindByID(999)
+	_, err = repo.FindByID(ctx, 999)
 	if err == nil {
 		t.Error("expected error for non-existent ID")
 	}
 }
 
 func TestSQLiteRepo_Delete(t *testing.T) {
+	ctx := context.Background()
 	repo, _ := NewSQLiteRepo(":memory:")
 	defer repo.Close()
 
 	// Setup
 	p := &domain.Podcast{Title: "Test", FeedURL: "https://example.com/feed.xml"}
-	repo.Save(p)
+	repo.Save(ctx, p)
 
 	// Test
-	err := repo.Delete(p.ID)
+	err := repo.Delete(ctx, p.ID)
 	if err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
 
 	// Verify deleted
-	_, err = repo.FindByID(p.ID)
+	_, err = repo.FindByID(ctx, p.ID)
 	if err == nil {
 		t.Error("expected error after deletion")
 	}
 }
 
 func TestSQLiteRepo_SaveEpisode(t *testing.T) {
+	ctx := context.Background()
 	repo, _ := NewSQLiteRepo(":memory:")
 	defer repo.Close()
 
 	// Setup: create podcast
 	podcast := &domain.Podcast{Title: "Test", FeedURL: "https://example.com/feed.xml"}
-	repo.Save(podcast)
+	repo.Save(ctx, podcast)
 
 	// Test
 	episode := &domain.Episode{
@@ -135,7 +141,7 @@ func TestSQLiteRepo_SaveEpisode(t *testing.T) {
 		AudioURL:    "https://example.com/episode.mp3",
 	}
 
-	err := repo.SaveEpisode(episode)
+	err := repo.SaveEpisode(ctx, episode)
 	if err != nil {
 		t.Fatalf("SaveEpisode failed: %v", err)
 	}
@@ -146,20 +152,21 @@ func TestSQLiteRepo_SaveEpisode(t *testing.T) {
 }
 
 func TestSQLiteRepo_FindEpisodesByPodcastID(t *testing.T) {
+	ctx := context.Background()
 	repo, _ := NewSQLiteRepo(":memory:")
 	defer repo.Close()
 
 	// Setup
 	podcast := &domain.Podcast{Title: "Test", FeedURL: "https://example.com/feed.xml"}
-	repo.Save(podcast)
+	repo.Save(ctx, podcast)
 
 	e1 := &domain.Episode{PodcastID: podcast.ID, Title: "Ep 1", AudioURL: "https://example.com/1.mp3"}
 	e2 := &domain.Episode{PodcastID: podcast.ID, Title: "Ep 2", AudioURL: "https://example.com/2.mp3"}
-	repo.SaveEpisode(e1)
-	repo.SaveEpisode(e2)
+	repo.SaveEpisode(ctx, e1)
+	repo.SaveEpisode(ctx, e2)
 
 	// Test
-	episodes, err := repo.FindEpisodesByPodcastID(podcast.ID)
+	episodes, err := repo.FindEpisodesByPodcastID(ctx, podcast.ID)
 	if err != nil {
 		t.Fatalf("FindEpisodesByPodcastID failed: %v", err)
 	}
@@ -170,18 +177,19 @@ func TestSQLiteRepo_FindEpisodesByPodcastID(t *testing.T) {
 }
 
 func TestSQLiteRepo_FindEpisodeByID(t *testing.T) {
+	ctx := context.Background()
 	repo, _ := NewSQLiteRepo(":memory:")
 	defer repo.Close()
 
 	// Setup
 	podcast := &domain.Podcast{Title: "Test", FeedURL: "https://example.com/feed.xml"}
-	repo.Save(podcast)
+	repo.Save(ctx, podcast)
 
 	episode := &domain.Episode{PodcastID: podcast.ID, Title: "Ep 1", AudioURL: "https://example.com/1.mp3"}
-	repo.SaveEpisode(episode)
+	repo.SaveEpisode(ctx, episode)
 
 	// Test - found
-	found, err := repo.FindEpisodeByID(episode.ID)
+	found, err := repo.FindEpisodeByID(ctx, episode.ID)
 	if err != nil {
 		t.Fatalf("FindEpisodeByID failed: %v", err)
 	}
@@ -190,31 +198,32 @@ func TestSQLiteRepo_FindEpisodeByID(t *testing.T) {
 	}
 
 	// Test - not found
-	_, err = repo.FindEpisodeByID(999)
+	_, err = repo.FindEpisodeByID(ctx, 999)
 	if err == nil {
 		t.Error("expected error for non-existent ID")
 	}
 }
 
 func TestSQLiteRepo_DeleteEpisode(t *testing.T) {
+	ctx := context.Background()
 	repo, _ := NewSQLiteRepo(":memory:")
 	defer repo.Close()
 
 	// Setup
 	podcast := &domain.Podcast{Title: "Test", FeedURL: "https://example.com/feed.xml"}
-	repo.Save(podcast)
+	repo.Save(ctx, podcast)
 
 	episode := &domain.Episode{PodcastID: podcast.ID, Title: "Ep 1", AudioURL: "https://example.com/1.mp3"}
-	repo.SaveEpisode(episode)
+	repo.SaveEpisode(ctx, episode)
 
 	// Test
-	err := repo.DeleteEpisode(episode.ID)
+	err := repo.DeleteEpisode(ctx, episode.ID)
 	if err != nil {
 		t.Fatalf("DeleteEpisode failed: %v", err)
 	}
 
 	// Verify deleted
-	_, err = repo.FindEpisodeByID(episode.ID)
+	_, err = repo.FindEpisodeByID(ctx, episode.ID)
 	if err == nil {
 		t.Error("expected error after deletion")
 	}
@@ -225,6 +234,7 @@ func TestSQLiteRepo_DeleteEpisode(t *testing.T) {
 // and download jobs (the schema declares ON DELETE CASCADE but it was a no-op
 // before the pragma was set per-connection).
 func TestSQLiteRepo_ForeignKeysCascadeOnDelete(t *testing.T) {
+	ctx := context.Background()
 	repo, err := NewSQLiteRepo(":memory:")
 	if err != nil {
 		t.Fatalf("NewSQLiteRepo failed: %v", err)
@@ -232,7 +242,7 @@ func TestSQLiteRepo_ForeignKeysCascadeOnDelete(t *testing.T) {
 	defer repo.Close()
 
 	podcast := &domain.Podcast{Title: "Cascade Test", FeedURL: "https://example.com/cascade.xml"}
-	if err := repo.Save(podcast); err != nil {
+	if err := repo.Save(ctx, podcast); err != nil {
 		t.Fatalf("Save failed: %v", err)
 	}
 	episode := &domain.Episode{
@@ -240,26 +250,26 @@ func TestSQLiteRepo_ForeignKeysCascadeOnDelete(t *testing.T) {
 		Title:     "Ep",
 		AudioURL:  "https://example.com/cascade.mp3",
 	}
-	if err := repo.SaveEpisode(episode); err != nil {
+	if err := repo.SaveEpisode(ctx, episode); err != nil {
 		t.Fatalf("SaveEpisode failed: %v", err)
 	}
 	job := &domain.DownloadJob{
 		EpisodeID: episode.ID,
 		Status:    domain.DownloadStatusQueued,
 	}
-	if err := repo.SaveDownloadJob(job); err != nil {
+	if err := repo.SaveDownloadJob(ctx, job); err != nil {
 		t.Fatalf("SaveDownloadJob failed: %v", err)
 	}
 
 	// Delete the parent podcast; cascade should remove the episode and job.
-	if err := repo.Delete(podcast.ID); err != nil {
+	if err := repo.Delete(ctx, podcast.ID); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
 
-	if eps, err := repo.FindEpisodesByPodcastID(podcast.ID); err != nil || len(eps) != 0 {
+	if eps, err := repo.FindEpisodesByPodcastID(ctx, podcast.ID); err != nil || len(eps) != 0 {
 		t.Errorf("episodes not cascaded: err=%v eps=%d", err, len(eps))
 	}
-	if _, err := repo.FindDownloadJobByEpisodeID(episode.ID); err == nil {
+	if _, err := repo.FindDownloadJobByEpisodeID(ctx, episode.ID); err == nil {
 		t.Error("download job not cascaded: expected error (no rows)")
 	}
 }
@@ -268,6 +278,7 @@ func TestSQLiteRepo_ForeignKeysCascadeOnDelete(t *testing.T) {
 // foreign_keys = ON, inserting a child row referencing a nonexistent parent
 // must fail (previously it silently succeeded).
 func TestSQLiteRepo_ForeignKeyEnforcedRejectsOrphan(t *testing.T) {
+	ctx := context.Background()
 	repo, err := NewSQLiteRepo(":memory:")
 	if err != nil {
 		t.Fatalf("NewSQLiteRepo failed: %v", err)
@@ -279,7 +290,7 @@ func TestSQLiteRepo_ForeignKeyEnforcedRejectsOrphan(t *testing.T) {
 		Title:     "Orphan",
 		AudioURL:  "https://example.com/orphan.mp3",
 	}
-	if err := repo.SaveEpisode(orphan); err == nil {
+	if err := repo.SaveEpisode(ctx, orphan); err == nil {
 		t.Error("expected foreign-key violation when inserting an orphan episode, got nil")
 	}
 }

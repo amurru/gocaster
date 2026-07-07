@@ -1,17 +1,19 @@
 package player
 
 import (
+	"context"
 	"testing"
 )
 
 func TestMPVPlayer_IsPlaying(t *testing.T) {
+	ctx := context.Background()
 	player := NewMPVPlayer()
 
-	if player.IsPlaying() {
+	if player.IsPlaying(ctx) {
 		t.Error("IsPlaying should return false when no media loaded")
 	}
 
-	if err := player.Close(); err != nil {
+	if err := player.Close(ctx); err != nil {
 		t.Fatalf("Close failed: %v", err)
 	}
 }
@@ -27,7 +29,7 @@ func TestMPVPlayer_AudioOutputOption(t *testing.T) {
 	if mpv1.audioOutput != "auto" {
 		t.Errorf("default audioOutput = %q, want %q", mpv1.audioOutput, "auto")
 	}
-	_ = p1.Close()
+	_ = p1.Close(context.Background())
 
 	// Explicit backend is honored.
 	p2 := NewMPVPlayer(WithAudioOutput("alsa"))
@@ -35,7 +37,7 @@ func TestMPVPlayer_AudioOutputOption(t *testing.T) {
 	if mpv2.audioOutput != "alsa" {
 		t.Errorf("audioOutput = %q, want %q", mpv2.audioOutput, "alsa")
 	}
-	_ = p2.Close()
+	_ = p2.Close(context.Background())
 
 	// Whitespace is trimmed.
 	p3 := NewMPVPlayer(WithAudioOutput("  pipewire  "))
@@ -43,7 +45,7 @@ func TestMPVPlayer_AudioOutputOption(t *testing.T) {
 	if mpv3.audioOutput != "pipewire" {
 		t.Errorf("audioOutput = %q, want %q", mpv3.audioOutput, "pipewire")
 	}
-	_ = p3.Close()
+	_ = p3.Close(context.Background())
 }
 
 // TestToFloat64_NoPanic covers issue #3: toFloat64 must not panic on any of the

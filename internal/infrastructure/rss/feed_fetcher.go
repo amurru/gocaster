@@ -16,9 +16,13 @@ func NewFeedFetcher() *FeedFetcher {
 	return &FeedFetcher{}
 }
 
-func (f *FeedFetcher) Parse(url string) (*domain.Podcast, []domain.Episode, error) {
+func (f *FeedFetcher) Parse(ctx context.Context, url string) (*domain.Podcast, []domain.Episode, error) {
 	fp := gofeed.NewParser()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Derive the request timeout from the caller's context so a cancelled
+	// caller (e.g. shutdown, or a shorter-lived TUI command) cancels the fetch
+	// immediately instead of waiting the full 10s. The 10s cap still bounds a
+	// slow server when the caller itself has no deadline (issue #11).
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	feed, err := fp.ParseURLWithContext(url, ctx)
