@@ -284,6 +284,9 @@ func TestModelViewRendersHelpAndModalStatesAfterResize(t *testing.T) {
 	if !strings.Contains(helpView, "Help & Shortcuts") {
 		t.Fatalf("expected help view to render help content, got %q", helpView)
 	}
+	if !strings.Contains(helpView, "Gocaster") {
+		t.Fatalf("expected help view to render the Gocaster logo, got %q", helpView)
+	}
 
 	updated, _ = current.Update(keyMsg("", tea.KeyEsc))
 	current = updated.(Model)
