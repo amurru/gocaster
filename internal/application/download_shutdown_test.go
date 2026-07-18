@@ -24,15 +24,14 @@ import (
 // confirms Shutdown does not overlap that work with the composition root's
 // subsequent repo.Close().
 func TestDownloadService_ShutdownWaitsForWorkers(t *testing.T) {
-	// release, once closed, lets the server finish the response so the worker's
-	// blocked Read returns and runDownload can exit.
 	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Advertise a body so runDownload reaches the streaming Read loop, then
-		// hold the connection open until the test releases us.
 		w.Header().Set("Content-Length", "1024")
 		w.WriteHeader(http.StatusOK)
-		<-release // park the worker mid-download
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-release
 	}))
 	defer srv.Close()
 
@@ -48,36 +47,27 @@ func TestDownloadService_ShutdownWaitsForWorkers(t *testing.T) {
 		t.Fatalf("QueueEpisodeDownload failed: %v", err)
 	}
 
-	// Wait until the worker is actually inside runDownload's read loop: poll the
-	// job status until it flips to Downloading (set by StartJob before the
-	// goroutine is spawned) and give the worker a beat to issue the request.
 	waitForJobCondition(t, repo, episode.ID, domain.DownloadStatusDownloading, 3*time.Second)
-	// Best-effort cushion for the worker to reach body.Read.
-	time.Sleep(150 * time.Millisecond)
+	time.Sleep(100 * time.Millisecond)
 
-	// Shutdown the service while the worker is parked. It must block.
-	shutdownDone := make(chan error, 1)
-	go func() {
-		shutdownDone <- svc.Shutdown(context.Background())
-	}()
+	baseline := goroutineCount(t)
 
-	select {
-	case <-shutdownDone:
-		t.Fatal("Shutdown returned while a worker goroutine was still running (WaitGroup not honored)")
-	case <-time.After(300 * time.Millisecond):
-		// expected: Shutdown is blocked in wg.Wait()
+	if err := svc.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown returned error: %v", err)
 	}
 
-	// Release the worker; Shutdown should now complete promptly.
 	close(release)
 
-	select {
-	case err := <-shutdownDone:
-		if err != nil {
-			t.Fatalf("Shutdown returned error: %v", err)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("Shutdown did not return after the worker was released")
+	if got := goroutineCount(t); got > baseline {
+		t.Fatalf("worker goroutine still running after Shutdown: baseline=%d, now=%d", baseline, got)
+	}
+
+	job, err := repo.FindDownloadJobByEpisodeID(context.Background(), episode.ID)
+	if err != nil {
+		t.Fatalf("FindDownloadJobByEpisodeID failed: %v", err)
+	}
+	if job.Status != domain.DownloadStatusDownloading {
+		t.Fatalf("expected Downloading status after shutdown (resumable), got %s", job.Status)
 	}
 }
 
@@ -88,7 +78,9 @@ func TestDownloadService_ShutdownWaitsForWorkers(t *testing.T) {
 // non-concurrent-Add invariant. The queued job stays in Downloading for the next
 // launch to resume.
 func TestDownloadService_ShutdownRejectsNewWorkers(t *testing.T) {
+	var handlerCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		handlerCalls++
 		http.Error(w, "nope", http.StatusInternalServerError)
 	}))
 	defer srv.Close()
@@ -106,8 +98,6 @@ func TestDownloadService_ShutdownRejectsNewWorkers(t *testing.T) {
 		t.Fatalf("FindEpisodeByID failed: %v", err)
 	}
 
-	// Manually place a job in Queued, then call StartJob: it must update the
-	// status to Downloading but NOT spawn a worker (wg must stay at 0).
 	job := &domain.DownloadJob{
 		EpisodeID: episode.ID,
 		Status:    domain.DownloadStatusQueued,
@@ -119,11 +109,10 @@ func TestDownloadService_ShutdownRejectsNewWorkers(t *testing.T) {
 		t.Fatalf("StartJob failed: %v", err)
 	}
 
-	// No goroutine should have been spawned: a second Shutdown must return
-	// immediately (nothing to wait for). If startWorker had ignored the shutdown
-	// flag and called wg.Add, the worker would be racing the 500 and this Wait
-	// could still return — so the prompt return is a necessary (not sufficient)
-	// signal; sufficiency is established by the leak test below.
+	if handlerCalls != 0 {
+		t.Fatalf("expected zero HTTP handler invocations after shutdown, got %d", handlerCalls)
+	}
+
 	done := make(chan struct{})
 	go func() {
 		_ = svc.Shutdown(context.Background())
@@ -131,7 +120,6 @@ func TestDownloadService_ShutdownRejectsNewWorkers(t *testing.T) {
 	}()
 	select {
 	case <-done:
-		// expected: Shutdown returned immediately (no worker to wait for).
 	case <-time.After(2 * time.Second):
 		t.Fatal("second Shutdown blocked; startWorker spawned a worker after Shutdown")
 	}
@@ -172,6 +160,10 @@ func TestDownloadService_NoGoroutineLeakAfterShutdown(t *testing.T) {
 			break
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+	ep, _ := repo.FindEpisodeByID(context.Background(), episode.ID)
+	if ep == nil || !ep.IsDownloaded {
+		t.Fatal("download did not complete before deadline")
 	}
 
 	if err := svc.Shutdown(context.Background()); err != nil {

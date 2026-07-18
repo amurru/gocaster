@@ -140,8 +140,8 @@ func (m *mockRepo) UpdateEpisodePlaybackState(ctx context.Context, id int64, isP
 }
 
 func (m *mockRepo) Save(ctx context.Context, podcast *domain.Podcast) error { return nil }
-func (m *mockRepo) FindAll(ctx context.Context) ([]domain.Podcast, error)    { return nil, nil }
-func (m *mockRepo) Delete(ctx context.Context, id int64) error               { return nil }
+func (m *mockRepo) FindAll(ctx context.Context) ([]domain.Podcast, error)   { return nil, nil }
+func (m *mockRepo) Delete(ctx context.Context, id int64) error              { return nil }
 func (m *mockRepo) SaveEpisode(ctx context.Context, episode *domain.Episode) error {
 	return nil
 }

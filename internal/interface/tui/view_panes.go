@@ -14,7 +14,7 @@ func (m Model) renderHelpPage() string {
 	width := m.contentWidth()
 	title := m.theme.SectionTitle.Render("Help & Shortcuts")
 	subtitle := m.theme.MutedText.Render("How to use Gocaster and navigate the interface.")
-	logo := m.theme.MutedText.Render(asciiLogo(width))
+	logo := m.theme.MutedText.Render(asciiLogo(max(width-4, 20)))
 	panel := m.theme.PanelFocused.Width(max(width-4, 20))
 
 	return panel.Render(lipgloss.JoinVertical(lipgloss.Left,
