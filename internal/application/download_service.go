@@ -49,11 +49,23 @@ type DownloadService struct {
 	// composition root.
 	rootCtx context.Context
 
-	// mu guards cancels. cancels maps a job ID to the cancel entry of its
-	// per-job context, so Shutdown/StopJob can cancel a specific download and
-	// runDownload can remove its own entry when it exits (issue #11).
+	// mu guards cancels and shutdown. cancels maps a job ID to the cancel entry
+	// of its per-job context, so Shutdown/StopJob can cancel a specific download
+	// and runDownload can remove its own entry when it exits (issue #11).
 	mu      sync.Mutex
 	cancels map[int64]*cancelEntry
+
+	// shutdown is set by Shutdown() under mu; startWorker checks it under the
+	// same lock before calling wg.Add, so no Add can race with Shutdown's
+	// wg.Wait — the WaitGroup happens-before / non-concurrent-Add invariants
+	// (issue #15).
+	shutdown bool
+
+	// wg tracks every in-flight runDownload goroutine so Shutdown can block
+	// until they have all exited before returning. Without it, Shutdown
+	// cancelled the per-job contexts and returned immediately, leaving workers
+	// mid-DB-write when the composition root closed the repo (issue #15).
+	wg sync.WaitGroup
 }
 
 // NewDownloadService accepts only the focused repository ports a download
@@ -159,17 +171,29 @@ func (s *DownloadService) StopJob(jobID int64) {
 	s.mu.Unlock()
 }
 
-// Shutdown cancels every in-flight download context. It is called by the
-// composition root on exit so download goroutines do not outlive the process or
-// touch a closed DB (issue #11). It is safe to call concurrently with job
-// start/stop.
+// Shutdown cancels every in-flight download context and blocks until every
+// worker goroutine has exited. It is called by the composition root on exit so
+// download goroutines neither outlive the process nor touch a closed DB (issue
+// #11). Blocking on the WaitGroup (issue #15) closes the window where Shutdown
+// previously returned while runDownload was still mid-write: the composition
+// root proceeds to repo.Close() only once no worker can touch the DB again.
+//
+// It is safe to call concurrently with job start/stop. After Shutdown returns,
+// startWorker refuses to spawn new workers, so retries queued during/after
+// teardown leave the job in Downloading for the next launch to resume.
 func (s *DownloadService) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
+	// Reject new workers so a StartJob racing with Shutdown cannot wg.Add after
+	// the Wait below (which would violate the WaitGroup non-concurrent-Add
+	// invariant and let a worker leak).
+	s.shutdown = true
 	for jobID, entry := range s.cancels {
 		entry.cancel()
 		delete(s.cancels, jobID)
 	}
 	s.mu.Unlock()
+
+	s.wg.Wait()
 	return nil
 }
 
@@ -318,7 +342,21 @@ func (s *DownloadService) RetryJob(ctx context.Context, jobID int64) error {
 // startWorker registers the job's cancel entry and spawns runDownload under
 // that context. Split out of StartJob/ResumeJob/RetryJob so all three share
 // the same "register before spawn" ordering (CodeRabbit review of PR #41).
+//
+// The shutdown check and wg.Add run under the same mutex hold that Shutdown
+// takes, so a StartJob racing with Shutdown can never call wg.Add after
+// Shutdown has begun wg.Wait — that would violate the WaitGroup invariant and
+// leak the worker (issue #15). Once Shutdown is in flight, new workers are
+// refused; the job stays in Downloading and the next launch resumes it.
 func (s *DownloadService) startWorker(jobID int64) {
+	s.mu.Lock()
+	if s.shutdown {
+		s.mu.Unlock()
+		return
+	}
+	s.wg.Add(1)
+	s.mu.Unlock()
+
 	ctx, cleanup := s.registerJobCancel(jobID)
 	go s.runDownload(ctx, cleanup, jobID)
 }
@@ -367,6 +405,11 @@ func (s *DownloadService) ListJobsWithEpisodes(ctx context.Context) ([]DownloadJ
 // failJob writes the failure with an uncancellable context, so a cancelled
 // download is still persisted as Failed with its partial bytes preserved.
 func (s *DownloadService) runDownload(ctx context.Context, cleanup func(), jobID int64) {
+	// Decrement the WaitGroup before cleanup so Shutdown's wg.Wait cannot
+	// return while any work (including the cleanup unregister) is still in
+	// flight. Done is deferred first so it always runs, even on the early
+	// ctx.Err() return below (issue #15).
+	defer s.wg.Done()
 	defer cleanup()
 
 	if err := ctx.Err(); err != nil {
