@@ -127,10 +127,10 @@ func TestDownloadService_ShutdownRejectsNewWorkers(t *testing.T) {
 
 // TestDownloadService_NoGoroutineLeakAfterShutdown is the goleak-style
 // assertion from issue #15's acceptance criteria: after Shutdown returns, no
-// runDownload goroutine remains. It snapshots the goroutine count before any
-// download, runs a download to completion, shuts down, and confirms the count
-// returns to baseline. Run under -race to catch any residual worker touching
-// repo state after the composition root would have closed it.
+// runDownload goroutine remains. It snapshots the goroutine count after all
+// infrastructure is created, runs a download to completion, shuts down, and
+// confirms the count returns to baseline. Run under -race to catch any residual
+// worker touching repo state after the composition root would have closed it.
 func TestDownloadService_NoGoroutineLeakAfterShutdown(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Length", "16")
@@ -138,11 +138,13 @@ func TestDownloadService_NoGoroutineLeakAfterShutdown(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	baseline := goroutineCount(t)
-
 	dir := t.TempDir()
 	repo := newDownloadTestRepo(t, srv.URL+"/ep.mp3")
 	svc := NewDownloadService(repo, repo, repo, repo, dir, nil)
+
+	// Baseline after all infrastructure (SQLite pool, httptest server) is up so
+	// their background goroutines are counted from the start.
+	baseline := goroutineCount(t)
 
 	episode, err := repo.FindEpisodeByID(context.Background(), 1)
 	if err != nil {
@@ -170,9 +172,13 @@ func TestDownloadService_NoGoroutineLeakAfterShutdown(t *testing.T) {
 		t.Fatalf("Shutdown failed: %v", err)
 	}
 
-	// After Shutdown, the goroutine count must be back at the baseline. A leaked
-	// runDownload (e.g. a worker spawned but never waited on) keeps it elevated.
+	// Drain HTTP transport idle connections and close the test server so their
+	// goroutines exit before we sample.
+	downloadTransport.CloseIdleConnections()
+	srv.Close()
+
 	if got := goroutineCount(t); got > baseline {
+		t.Logf("goroutine stacks AFTER shutdown:\n%s", goroutineDump())
 		t.Fatalf("goroutine leak: baseline=%d, after shutdown=%d", baseline, got)
 	}
 }
@@ -205,4 +211,12 @@ func goroutineCount(t *testing.T) int {
 		time.Sleep(10 * time.Millisecond)
 	}
 	return n
+}
+
+// goroutineDump returns a snapshot of all goroutine stacks as a string. Used
+// for diagnostics when the goroutine count exceeds expectations.
+func goroutineDump() string {
+	buf := make([]byte, 1<<20) // 1 MB buffer
+	n := runtime.Stack(buf, true)
+	return string(buf[:n])
 }
