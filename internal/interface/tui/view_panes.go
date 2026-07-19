@@ -11,12 +11,15 @@ import (
 )
 
 func (m Model) renderHelpPage() string {
+	width := m.contentWidth()
 	title := m.theme.SectionTitle.Render("Help & Shortcuts")
 	subtitle := m.theme.MutedText.Render("How to use Gocaster and navigate the interface.")
-	panel := m.theme.PanelFocused.Width(max(m.contentWidth()-4, 20))
+	logo := m.theme.MutedText.Render(asciiLogo(max(width-4, 20)))
+	panel := m.theme.PanelFocused.Width(max(width-4, 20))
 
-	// TODO: add app logo
 	return panel.Render(lipgloss.JoinVertical(lipgloss.Left,
+		logo,
+		"",
 		title,
 		subtitle,
 		"",

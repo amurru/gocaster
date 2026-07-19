@@ -613,5 +613,3 @@ func TestFailJob_PersistsEvenWithCancelledContext(t *testing.T) {
 		t.Error("expected non-empty error message on the cancellation path")
 	}
 }
-
-

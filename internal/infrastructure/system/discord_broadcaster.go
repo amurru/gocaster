@@ -86,7 +86,8 @@ func (b *discordBroadcaster) Close(ctx context.Context) error {
 	return nil
 }
 
-func (b *discordBroadcaster) SetController(ctx context.Context, controller domain.PlaybackController) {}
+func (b *discordBroadcaster) SetController(ctx context.Context, controller domain.PlaybackController) {
+}
 
 func (b *discordBroadcaster) ensureLoggedInLocked(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {

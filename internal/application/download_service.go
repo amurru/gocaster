@@ -49,11 +49,23 @@ type DownloadService struct {
 	// composition root.
 	rootCtx context.Context
 
-	// mu guards cancels. cancels maps a job ID to the cancel entry of its
-	// per-job context, so Shutdown/StopJob can cancel a specific download and
-	// runDownload can remove its own entry when it exits (issue #11).
+	// mu guards cancels and shutdown. cancels maps a job ID to the cancel entry
+	// of its per-job context, so Shutdown/StopJob can cancel a specific download
+	// and runDownload can remove its own entry when it exits (issue #11).
 	mu      sync.Mutex
 	cancels map[int64]*cancelEntry
+
+	// shutdown is set by Shutdown() under mu; startWorker checks it under the
+	// same lock before calling wg.Add, so no Add can race with Shutdown's
+	// wg.Wait — the WaitGroup happens-before / non-concurrent-Add invariants
+	// (issue #15).
+	shutdown bool
+
+	// wg tracks every in-flight runDownload goroutine so Shutdown can block
+	// until they have all exited before returning. Without it, Shutdown
+	// cancelled the per-job contexts and returned immediately, leaving workers
+	// mid-DB-write when the composition root closed the repo (issue #15).
+	wg sync.WaitGroup
 }
 
 // NewDownloadService accepts only the focused repository ports a download
@@ -97,23 +109,21 @@ func (s *DownloadService) SetRootContext(ctx context.Context) {
 	s.mu.Unlock()
 }
 
-// registerJobCancel derives a per-job context from the root, records its cancel
-// entry in s.cancels so StopJob/Shutdown can cancel it, and returns the context
-// plus a cleanup function the caller defers to remove the entry once runDownload
-// exits (issue #11).
+// registerJobCancelLocked derives a per-job context from the root, records its
+// cancel entry in s.cancels so StopJob/Shutdown can cancel it, and returns the
+// context plus a cleanup function the caller defers to remove the entry once
+// runDownload exits (issue #11).
 //
-// It is called by StartJob/ResumeJob/RetryJob BEFORE the goroutine is spawned,
-// so there is no window in which StopJob(jobID) would miss a freshly-started
-// job (CodeRabbit review of PR #41).
-func (s *DownloadService) registerJobCancel(jobID int64) (context.Context, func()) {
-	s.mu.Lock()
+// Must be called with s.mu held. This eliminates the window between wg.Add
+// and cancel registration where StopJob could miss a freshly-started job
+// (CodeRabbit review of PR #44).
+func (s *DownloadService) registerJobCancelLocked(jobID int64) (context.Context, func()) {
 	parent := s.rootCtx
 	// If a previous attempt's cancel is still registered (e.g. retry racing
 	// with completion), cancel it before overwriting to avoid a leak.
 	if prev, ok := s.cancels[jobID]; ok {
 		prev.cancel()
 	}
-	s.mu.Unlock()
 
 	ctx, cancel := context.WithCancel(parent)
 
@@ -121,10 +131,7 @@ func (s *DownloadService) registerJobCancel(jobID int64) (context.Context, func(
 	// (Go funcs are not comparable, but pointers are). This lets cleanup tell
 	// whether the map still points at THIS attempt after a concurrent retry.
 	entry := &cancelEntry{cancel: cancel}
-
-	s.mu.Lock()
 	s.cancels[jobID] = entry
-	s.mu.Unlock()
 
 	cleanup := func() {
 		cancel()
@@ -159,17 +166,29 @@ func (s *DownloadService) StopJob(jobID int64) {
 	s.mu.Unlock()
 }
 
-// Shutdown cancels every in-flight download context. It is called by the
-// composition root on exit so download goroutines do not outlive the process or
-// touch a closed DB (issue #11). It is safe to call concurrently with job
-// start/stop.
+// Shutdown cancels every in-flight download context and blocks until every
+// worker goroutine has exited. It is called by the composition root on exit so
+// download goroutines neither outlive the process nor touch a closed DB (issue
+// #11). Blocking on the WaitGroup (issue #15) closes the window where Shutdown
+// previously returned while runDownload was still mid-write: the composition
+// root proceeds to repo.Close() only once no worker can touch the DB again.
+//
+// It is safe to call concurrently with job start/stop. After Shutdown returns,
+// startWorker refuses to spawn new workers, so retries queued during/after
+// teardown leave the job in Downloading for the next launch to resume.
 func (s *DownloadService) Shutdown(ctx context.Context) error {
 	s.mu.Lock()
+	// Reject new workers so a StartJob racing with Shutdown cannot wg.Add after
+	// the Wait below (which would violate the WaitGroup non-concurrent-Add
+	// invariant and let a worker leak).
+	s.shutdown = true
 	for jobID, entry := range s.cancels {
 		entry.cancel()
 		delete(s.cancels, jobID)
 	}
 	s.mu.Unlock()
+
+	s.wg.Wait()
 	return nil
 }
 
@@ -318,8 +337,21 @@ func (s *DownloadService) RetryJob(ctx context.Context, jobID int64) error {
 // startWorker registers the job's cancel entry and spawns runDownload under
 // that context. Split out of StartJob/ResumeJob/RetryJob so all three share
 // the same "register before spawn" ordering (CodeRabbit review of PR #41).
+//
+// The shutdown check and wg.Add run under the same mutex hold that Shutdown
+// takes, so a StartJob racing with Shutdown can never call wg.Add after
+// Shutdown has begun wg.Wait — that would violate the WaitGroup invariant and
+// leak the worker (issue #15). Once Shutdown is in flight, new workers are
+// refused; the job stays in Downloading and the next launch resumes it.
 func (s *DownloadService) startWorker(jobID int64) {
-	ctx, cleanup := s.registerJobCancel(jobID)
+	s.mu.Lock()
+	if s.shutdown {
+		s.mu.Unlock()
+		return
+	}
+	s.wg.Add(1)
+	ctx, cleanup := s.registerJobCancelLocked(jobID)
+	s.mu.Unlock()
 	go s.runDownload(ctx, cleanup, jobID)
 }
 
@@ -367,13 +399,10 @@ func (s *DownloadService) ListJobsWithEpisodes(ctx context.Context) ([]DownloadJ
 // failJob writes the failure with an uncancellable context, so a cancelled
 // download is still persisted as Failed with its partial bytes preserved.
 func (s *DownloadService) runDownload(ctx context.Context, cleanup func(), jobID int64) {
+	defer s.wg.Done()
 	defer cleanup()
 
 	if err := ctx.Err(); err != nil {
-		// Root already cancelled (e.g. shutdown racing with start): leave the
-		// job in Downloading so the next launch can resume it, rather than
-		// attempting a DB write that would itself fail under the cancelled
-		// context (issue #11).
 		s.logger.Debug("download skipped: context cancelled before start", "job_id", jobID, "err", err)
 		return
 	}
@@ -553,7 +582,7 @@ func (s *DownloadService) runDownload(ctx context.Context, cleanup func(), jobID
 
 	// Persist the resume-relevant metadata (paths, SupportsResume, ETag,
 	// Last-Modified) alongside the byte counters so that a retry after a
-	// transient failure can resume from the partial .part file (issue #1).
+	// transient failure can resume from the partial .part file on disk (issue #1).
 	// The earlier status update only wrote counters; SupportsResume was never
 	// persisted, which made the resume branch above unreachable on retry.
 	if err := s.jobs.UpdateDownloadJobProgress(ctx, job); err != nil {
@@ -663,6 +692,18 @@ func (s *DownloadService) failJob(_ context.Context, job *domain.DownloadJob, er
 		s.logger.Warn("could not fail job: nil job")
 		return
 	}
+
+	s.mu.Lock()
+	shutdown := s.shutdown
+	s.mu.Unlock()
+
+	// During shutdown the context is cancelled by Shutdown, not by the user.
+	// Leave the job in its current status (Downloading) so the next launch
+	// resumes it instead of persisting a Failed with a truncated context write.
+	if shutdown {
+		return
+	}
+
 	if err := s.jobs.UpdateDownloadJobStatus(
 		context.Background(),
 		job.ID,
