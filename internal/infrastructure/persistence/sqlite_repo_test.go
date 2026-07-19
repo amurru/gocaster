@@ -606,3 +606,663 @@ func TestSQLiteRepo_CompleteDownload(t *testing.T) {
 		t.Error("download job should have been deleted")
 	}
 }
+
+
+
+func seedPodcastEpisode(t *testing.T, repo *SQLiteRepo) (podcastID, episodeID int64) {
+	t.Helper()
+	ctx := context.Background()
+
+	podcast := &domain.Podcast{Title: "DL Test", FeedURL: "https://example.com/dltest.xml"}
+	if err := repo.Save(ctx, podcast); err != nil {
+		t.Fatalf("seed podcast: %v", err)
+	}
+	episode := &domain.Episode{
+		PodcastID: podcast.ID,
+		Title:     "DL Ep",
+		AudioURL:  "https://example.com/dl.mp3",
+	}
+	if err := repo.SaveEpisode(ctx, episode); err != nil {
+		t.Fatalf("seed episode: %v", err)
+	}
+	return podcast.ID, episode.ID
+}
+
+
+
+func TestSQLiteRepo_SaveDownloadJob(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, episodeID := seedPodcastEpisode(t, repo)
+
+	job := &domain.DownloadJob{
+		EpisodeID:       episodeID,
+		Status:          domain.DownloadStatusQueued,
+		BytesDownloaded: 0,
+		BytesTotal:      1024,
+		TempPath:        "/tmp/ep.part",
+		FinalPath:       "/tmp/ep.mp3",
+		ETag:            `"abc123"`,
+		LastModified:    "Wed, 01 Jan 2025 00:00:00 GMT",
+		SupportsResume:  true,
+		ErrorMessage:    "",
+	}
+
+	if err := repo.SaveDownloadJob(ctx, job); err != nil {
+		t.Fatalf("SaveDownloadJob: %v", err)
+	}
+
+	if job.ID == 0 {
+		t.Fatal("SaveDownloadJob did not set job.ID")
+	}
+
+	got, err := repo.FindDownloadJobByID(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("FindDownloadJobByID: %v", err)
+	}
+	if got.EpisodeID != episodeID {
+		t.Errorf("EpisodeID = %d, want %d", got.EpisodeID, episodeID)
+	}
+	if got.Status != domain.DownloadStatusQueued {
+		t.Errorf("Status = %q, want %q", got.Status, domain.DownloadStatusQueued)
+	}
+	if got.BytesTotal != 1024 {
+		t.Errorf("BytesTotal = %d, want 1024", got.BytesTotal)
+	}
+	if got.TempPath != "/tmp/ep.part" {
+		t.Errorf("TempPath = %q, want /tmp/ep.part", got.TempPath)
+	}
+	if got.FinalPath != "/tmp/ep.mp3" {
+		t.Errorf("FinalPath = %q, want /tmp/ep.mp3", got.FinalPath)
+	}
+	if got.ETag != `"abc123"` {
+		t.Errorf("ETag = %q, want %q", got.ETag, `"abc123"`)
+	}
+	if !got.SupportsResume {
+		t.Error("SupportsResume = false, want true")
+	}
+}
+
+func TestSQLiteRepo_SaveDownloadJob_MinimalFields(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, episodeID := seedPodcastEpisode(t, repo)
+
+	job := &domain.DownloadJob{
+		EpisodeID: episodeID,
+		Status:    domain.DownloadStatusQueued,
+	}
+	if err := repo.SaveDownloadJob(ctx, job); err != nil {
+		t.Fatalf("SaveDownloadJob: %v", err)
+	}
+	if job.ID == 0 {
+		t.Fatal("job.ID not set")
+	}
+
+	got, err := repo.FindDownloadJobByID(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BytesDownloaded != 0 {
+		t.Errorf("BytesDownloaded = %d, want 0", got.BytesDownloaded)
+	}
+	if got.BytesTotal != 0 {
+		t.Errorf("BytesTotal = %d, want 0", got.BytesTotal)
+	}
+	if got.ETag != "" {
+		t.Errorf("ETag = %q, want empty", got.ETag)
+	}
+}
+
+func TestSQLiteRepo_SaveDownloadJob_FKViolation(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	job := &domain.DownloadJob{
+		EpisodeID: 99999,
+		Status:    domain.DownloadStatusQueued,
+	}
+	if err := repo.SaveDownloadJob(ctx, job); err == nil {
+		t.Error("expected FK violation for nonexistent episode, got nil")
+	}
+}
+
+func TestSQLiteRepo_FindDownloadJobByEpisodeID_Found(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, episodeID := seedPodcastEpisode(t, repo)
+
+	job := &domain.DownloadJob{
+		EpisodeID: episodeID,
+		Status:    domain.DownloadStatusDownloading,
+	}
+	if err := repo.SaveDownloadJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.FindDownloadJobByEpisodeID(ctx, episodeID)
+	if err != nil {
+		t.Fatalf("FindDownloadJobByEpisodeID: %v", err)
+	}
+	if got.ID != job.ID {
+		t.Errorf("ID = %d, want %d", got.ID, job.ID)
+	}
+	if got.Status != domain.DownloadStatusDownloading {
+		t.Errorf("Status = %q, want %q", got.Status, domain.DownloadStatusDownloading)
+	}
+}
+
+func TestSQLiteRepo_FindDownloadJobByEpisodeID_NotFound(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, err = repo.FindDownloadJobByEpisodeID(ctx, 99999)
+	if err == nil {
+		t.Error("expected error for non-existent episode, got nil")
+	}
+}
+
+func TestSQLiteRepo_FindDownloadJobByID_NotFound(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, err = repo.FindDownloadJobByID(ctx, 99999)
+	if err == nil {
+		t.Error("expected error for non-existent job ID, got nil")
+	}
+}
+
+func TestSQLiteRepo_FindAllDownloadJobs(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, ep1 := seedPodcastEpisode(t, repo)
+
+	episode2 := &domain.Episode{
+		PodcastID: 1,
+		Title:     "Ep2",
+		AudioURL:  "https://example.com/ep2.mp3",
+	}
+	if err := repo.SaveEpisode(ctx, episode2); err != nil {
+		t.Fatal(err)
+	}
+
+	jobs := []domain.DownloadJob{
+		{EpisodeID: ep1, Status: domain.DownloadStatusQueued},
+		{EpisodeID: episode2.ID, Status: domain.DownloadStatusDownloading},
+	}
+	for i := range jobs {
+		if err := repo.SaveDownloadJob(ctx, &jobs[i]); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	all, err := repo.FindAllDownloadJobs(ctx)
+	if err != nil {
+		t.Fatalf("FindAllDownloadJobs: %v", err)
+	}
+	if len(all) != 2 {
+		t.Errorf("len = %d, want 2", len(all))
+	}
+}
+
+func TestSQLiteRepo_FindAllDownloadJobs_Empty(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	all, err := repo.FindAllDownloadJobs(ctx)
+	if err != nil {
+		t.Fatalf("FindAllDownloadJobs: %v", err)
+	}
+	if len(all) != 0 {
+		t.Errorf("expected empty slice, got %d jobs", len(all))
+	}
+}
+
+func TestSQLiteRepo_FindAllDownloadJobs_OrderedByUpdatedAt(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, ep1 := seedPodcastEpisode(t, repo)
+
+	episode2 := &domain.Episode{PodcastID: 1, Title: "Ep2", AudioURL: "https://example.com/ep2o.mp3"}
+	if err := repo.SaveEpisode(ctx, episode2); err != nil {
+		t.Fatal(err)
+	}
+
+	j1 := &domain.DownloadJob{EpisodeID: ep1, Status: domain.DownloadStatusQueued}
+	j2 := &domain.DownloadJob{EpisodeID: episode2.ID, Status: domain.DownloadStatusDownloading}
+
+	if err := repo.SaveDownloadJob(ctx, j1); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.UpdateDownloadJobStatus(ctx, j1.ID, domain.DownloadStatusDownloading, 100, 500, ""); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+	if err := repo.SaveDownloadJob(ctx, j2); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := repo.FindAllDownloadJobs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 2 {
+		t.Fatalf("len = %d, want 2", len(all))
+	}
+	if all[0].ID != j2.ID {
+		t.Errorf("first job ID = %d, want %d (j2)", all[0].ID, j2.ID)
+	}
+}
+
+func TestSQLiteRepo_UpdateDownloadJobStatus(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, episodeID := seedPodcastEpisode(t, repo)
+
+	job := &domain.DownloadJob{EpisodeID: episodeID, Status: domain.DownloadStatusQueued, BytesTotal: 2048}
+	if err := repo.SaveDownloadJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+
+	err = repo.UpdateDownloadJobStatus(ctx, job.ID, domain.DownloadStatusDownloading, 512, 2048, "")
+	if err != nil {
+		t.Fatalf("UpdateDownloadJobStatus: %v", err)
+	}
+
+	got, err := repo.FindDownloadJobByID(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.DownloadStatusDownloading {
+		t.Errorf("Status = %q, want %q", got.Status, domain.DownloadStatusDownloading)
+	}
+	if got.BytesDownloaded != 512 {
+		t.Errorf("BytesDownloaded = %d, want 512", got.BytesDownloaded)
+	}
+}
+
+func TestSQLiteRepo_UpdateDownloadJobStatus_WithError(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, episodeID := seedPodcastEpisode(t, repo)
+
+	job := &domain.DownloadJob{EpisodeID: episodeID, Status: domain.DownloadStatusDownloading}
+	if err := repo.SaveDownloadJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+
+	err = repo.UpdateDownloadJobStatus(ctx, job.ID, domain.DownloadStatusFailed, 100, 2000, "network timeout")
+	if err != nil {
+		t.Fatalf("UpdateDownloadJobStatus: %v", err)
+	}
+
+	got, err := repo.FindDownloadJobByID(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.DownloadStatusFailed {
+		t.Errorf("Status = %q, want %q", got.Status, domain.DownloadStatusFailed)
+	}
+	if got.ErrorMessage != "network timeout" {
+		t.Errorf("ErrorMessage = %q, want %q", got.ErrorMessage, "network timeout")
+	}
+	if got.BytesDownloaded != 100 {
+		t.Errorf("BytesDownloaded = %d, want 100", got.BytesDownloaded)
+	}
+	if got.BytesTotal != 2000 {
+		t.Errorf("BytesTotal = %d, want 2000", got.BytesTotal)
+	}
+}
+
+func TestSQLiteRepo_UpdateDownloadJobStatus_UpdatesTimestamp(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, episodeID := seedPodcastEpisode(t, repo)
+
+	job := &domain.DownloadJob{EpisodeID: episodeID, Status: domain.DownloadStatusQueued}
+	if err := repo.SaveDownloadJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+
+	gotAfter, err := repo.FindDownloadJobByID(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAfter.UpdatedAt.IsZero() {
+		t.Error("UpdatedAt should be set after save")
+	}
+}
+
+func TestSQLiteRepo_UpdateDownloadJobProgress(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, episodeID := seedPodcastEpisode(t, repo)
+
+	job := &domain.DownloadJob{EpisodeID: episodeID, Status: domain.DownloadStatusDownloading}
+	if err := repo.SaveDownloadJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+
+	job.BytesDownloaded = 1024
+	job.BytesTotal = 4096
+	job.TempPath = "/tmp/partial.bin"
+	job.FinalPath = "/tmp/final.bin"
+	job.ETag = `"etag1"`
+	job.LastModified = "Thu, 02 Jan 2025 12:00:00 GMT"
+	job.SupportsResume = true
+
+	if err := repo.UpdateDownloadJobProgress(ctx, job); err != nil {
+		t.Fatalf("UpdateDownloadJobProgress: %v", err)
+	}
+
+	got, err := repo.FindDownloadJobByID(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.BytesDownloaded != 1024 {
+		t.Errorf("BytesDownloaded = %d, want 1024", got.BytesDownloaded)
+	}
+	if got.BytesTotal != 4096 {
+		t.Errorf("BytesTotal = %d, want 4096", got.BytesTotal)
+	}
+	if got.TempPath != "/tmp/partial.bin" {
+		t.Errorf("TempPath = %q, want /tmp/partial.bin", got.TempPath)
+	}
+	if got.FinalPath != "/tmp/final.bin" {
+		t.Errorf("FinalPath = %q, want /tmp/final.bin", got.FinalPath)
+	}
+	if got.ETag != `"etag1"` {
+		t.Errorf("ETag = %q, want %q", got.ETag, `"etag1"`)
+	}
+	if got.LastModified != "Thu, 02 Jan 2025 12:00:00 GMT" {
+		t.Errorf("LastModified = %q, want Thu, 02 Jan 2025 12:00:00 GMT", got.LastModified)
+	}
+	if !got.SupportsResume {
+		t.Error("SupportsResume = false, want true")
+	}
+}
+
+func TestSQLiteRepo_UpdateDownloadJobProgress_NilJob(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	err = repo.UpdateDownloadJobProgress(ctx, nil)
+	if err == nil {
+		t.Error("expected error for nil job, got nil")
+	}
+}
+
+func TestSQLiteRepo_UpdateDownloadJobProgress_DoesNotChangeStatus(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, episodeID := seedPodcastEpisode(t, repo)
+
+	job := &domain.DownloadJob{
+		EpisodeID: episodeID,
+		Status:    domain.DownloadStatusDownloading,
+	}
+	if err := repo.SaveDownloadJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+
+	job.BytesDownloaded = 256
+	if err := repo.UpdateDownloadJobProgress(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.FindDownloadJobByID(ctx, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.DownloadStatusDownloading {
+		t.Errorf("Status changed to %q, should remain %q", got.Status, domain.DownloadStatusDownloading)
+	}
+	if got.BytesDownloaded != 256 {
+		t.Errorf("BytesDownloaded = %d, want 256", got.BytesDownloaded)
+	}
+}
+
+func TestSQLiteRepo_CountNonFailedJobs(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, episodeID := seedPodcastEpisode(t, repo)
+
+	count, err := repo.CountNonFailedJobs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0, got %d", count)
+	}
+
+	ep2 := &domain.Episode{PodcastID: 1, Title: "C2", AudioURL: "https://example.com/c2.mp3"}
+	ep3 := &domain.Episode{PodcastID: 1, Title: "C3", AudioURL: "https://example.com/c3.mp3"}
+	repo.SaveEpisode(ctx, ep2)
+	repo.SaveEpisode(ctx, ep3)
+
+	j1 := &domain.DownloadJob{EpisodeID: episodeID, Status: domain.DownloadStatusQueued}
+	j2 := &domain.DownloadJob{EpisodeID: ep2.ID, Status: domain.DownloadStatusDownloading}
+	j3 := &domain.DownloadJob{EpisodeID: ep3.ID, Status: domain.DownloadStatusFailed}
+
+	repo.SaveDownloadJob(ctx, j1)
+	repo.SaveDownloadJob(ctx, j2)
+	repo.SaveDownloadJob(ctx, j3)
+
+	count, err = repo.CountNonFailedJobs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 non-failed jobs, got %d", count)
+	}
+}
+
+func TestSQLiteRepo_CountNonFailedJobs_AllFailed(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, episodeID := seedPodcastEpisode(t, repo)
+
+	j := &domain.DownloadJob{EpisodeID: episodeID, Status: domain.DownloadStatusFailed}
+	repo.SaveDownloadJob(ctx, j)
+
+	count, err := repo.CountNonFailedJobs(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0, got %d", count)
+	}
+}
+
+func TestSQLiteRepo_DeleteDownloadJob(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, episodeID := seedPodcastEpisode(t, repo)
+
+	job := &domain.DownloadJob{EpisodeID: episodeID, Status: domain.DownloadStatusCompleted}
+	if err := repo.SaveDownloadJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := repo.DeleteDownloadJob(ctx, job.ID); err != nil {
+		t.Fatalf("DeleteDownloadJob: %v", err)
+	}
+
+	_, err = repo.FindDownloadJobByID(ctx, job.ID)
+	if err == nil {
+		t.Error("expected error after deletion, got nil")
+	}
+}
+
+func TestSQLiteRepo_DeleteDownloadJob_NonExistent(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	if err := repo.DeleteDownloadJob(ctx, 99999); err != nil {
+		t.Errorf("deleting non-existent job should not error, got: %v", err)
+	}
+}
+
+func TestSQLiteRepo_MarkEpisodeDownloaded(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, episodeID := seedPodcastEpisode(t, repo)
+
+	if err := repo.MarkEpisodeDownloaded(ctx, episodeID, "/audio/podcast/ep1.mp3"); err != nil {
+		t.Fatalf("MarkEpisodeDownloaded: %v", err)
+	}
+
+	ep, err := repo.FindEpisodeByID(ctx, episodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ep.IsDownloaded {
+		t.Error("IsDownloaded = false, want true")
+	}
+	if ep.LocalPath != "/audio/podcast/ep1.mp3" {
+		t.Errorf("LocalPath = %q, want /audio/podcast/ep1.mp3", ep.LocalPath)
+	}
+}
+
+func TestSQLiteRepo_CompleteDownload_NonExistentJobStillMarksEpisode(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, episodeID := seedPodcastEpisode(t, repo)
+
+	if err := repo.CompleteDownload(ctx, episodeID, "/fake/path.mp3", 99999); err != nil {
+		t.Fatalf("CompleteDownload should not error when job ID is absent: %v", err)
+	}
+
+	ep, err := repo.FindEpisodeByID(ctx, episodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ep.IsDownloaded {
+		t.Error("episode should be marked downloaded even if job was already removed")
+	}
+}
+
+func TestSQLiteRepo_CompleteDownload_BadEpisodeID(t *testing.T) {
+	ctx := context.Background()
+	repo, err := NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer repo.Close()
+
+	_, episodeID := seedPodcastEpisode(t, repo)
+
+	job := &domain.DownloadJob{EpisodeID: episodeID, Status: domain.DownloadStatusCompleted}
+	if err := repo.SaveDownloadJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+
+	err = repo.CompleteDownload(ctx, 99999, "/no/where.mp3", job.ID)
+	if err != nil {
+		t.Errorf("SQLite UPDATE/DELETE on absent rows should not error, got: %v", err)
+	}
+
+	_, err = repo.FindDownloadJobByID(ctx, job.ID)
+	if err == nil {
+		t.Error("job should be deleted by CompleteDownload even when episode ID is absent")
+	}
+}
