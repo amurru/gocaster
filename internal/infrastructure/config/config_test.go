@@ -247,14 +247,22 @@ func TestAudioOutputParsing(t *testing.T) {
 
 func TestAudioOutputDefault(t *testing.T) {
 	for _, in := range []string{"", "   ", "\t"} {
-		if got := normalizeAudioOutput(in); got != defaultAudioOutput {
-			t.Errorf("for input %q, normalized = %q, want %q", in, got, defaultAudioOutput)
+		if got, err := normalizeAudioOutput(in); err != nil || got != defaultAudioOutput {
+			t.Errorf("for input %q, normalized = %q, err = %v, want %q", in, got, err, defaultAudioOutput)
 		}
 	}
-	if got := normalizeAudioOutput("pulse"); got != "pulse" {
-		t.Errorf("for input %q, normalized = %q, want %q", "pulse", got, "pulse")
+	if got, err := normalizeAudioOutput("pulse"); err != nil || got != "pulse" {
+		t.Errorf("for input %q, normalized = %q, err = %v, want %q", "pulse", got, err, "pulse")
 	}
-	if got := normalizeAudioOutput("  pipewire  "); got != "pipewire" {
-		t.Errorf("for input %q, normalized = %q, want %q", "  pipewire  ", got, "pipewire")
+	if got, err := normalizeAudioOutput("  pipewire  "); err != nil || got != "pipewire" {
+		t.Errorf("for input %q, normalized = %q, err = %v, want %q", "  pipewire  ", got, err, "pipewire")
+	}
+}
+
+func TestAudioOutputInvalid(t *testing.T) {
+	for _, in := range []string{"foobar", "pulseaudio", "Pulse", "AUTOMATIC"} {
+		if got, err := normalizeAudioOutput(in); err == nil {
+			t.Errorf("for input %q, normalized = %q, err = nil, want error", in, got)
+		}
 	}
 }

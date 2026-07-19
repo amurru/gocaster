@@ -82,7 +82,12 @@ func (p *MPVPlayer) initMPV() {
 	// systems (issue #4).
 	if p.audioOutput != "" && p.audioOutput != "auto" {
 		if err := p.mpv.SetOptionString("ao", p.audioOutput); err != nil {
-			p.debug("ao option failed", "ao", p.audioOutput, "err", err)
+			p.debug(
+				"audio output backend not available",
+				"ao", p.audioOutput,
+				"err", err,
+				"hint", "check audio_output in config; run mpv --ao=help to list available backends",
+			)
 		}
 	}
 	if err := p.mpv.SetOptionString("idle", "yes"); err != nil {

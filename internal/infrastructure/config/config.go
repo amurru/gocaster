@@ -116,19 +116,42 @@ func LoadOrCreate(logger domain.Logger) (Config, error) {
 		cfg.ThemeName = defaultThemeName
 	}
 
-	cfg.AudioOutput = normalizeAudioOutput(cfg.AudioOutput)
+	var audioErr error
+	cfg.AudioOutput, audioErr = normalizeAudioOutput(cfg.AudioOutput)
+	if audioErr != nil {
+		return cfg, audioErr
+	}
 
 	return cfg, nil
 }
 
+// validAudioOutputs lists the accepted values for the audio_output config
+// field. "auto" lets mpv autodetect; all others pin a specific backend.
+var validAudioOutputs = map[string]bool{
+	"auto":       true,
+	"pulse":      true,
+	"pipewire":   true,
+	"alsa":       true,
+	"jack":       true,
+	"coreaudio":  true,
+	"null":       true,
+}
+
 // normalizeAudioOutput trims surrounding whitespace and falls back to the
-// "auto" default (mpv autodetect) for empty values. Extracted so the defaulting
+// "auto" default (mpv autodetect) for empty values. Returns an error for
+// values not in the allowed set. Extracted so the defaulting and validation
 // logic is unit-testable independently of LoadOrCreate.
-func normalizeAudioOutput(s string) string {
+func normalizeAudioOutput(s string) (string, error) {
 	if s = strings.TrimSpace(s); s == "" {
-		return defaultAudioOutput
+		return defaultAudioOutput, nil
 	}
-	return s
+	if !validAudioOutputs[s] {
+		return "", fmt.Errorf(
+			"invalid audio_output %q (valid: auto, pulse, pipewire, alsa, jack, coreaudio, null)",
+			s,
+		)
+	}
+	return s, nil
 }
 
 type dirs struct {

@@ -69,6 +69,7 @@ If the config file doesn't exist, it will be created automatically with default 
 | `periodic_sync_minutes`    | `60`                                  | Interval in minutes for periodic refresh (must be > 0)                   |
 | `discord_presence_enabled` | `false`                               | Publish current playback as Discord Rich Presence                        |
 | `discord_client_id`        | `1496999428605612203`                 | Discord Application Client ID (override if you want to use your own app) |
+| `audio_output`             | `auto`                               | Audio output backend: `auto`, `pulse`, `pipewire`, `alsa`, `jack`, `coreaudio`, `null` |
 
 **Example config:**
 
@@ -80,6 +81,7 @@ periodic_sync_enabled = true
 periodic_sync_minutes = 60
 discord_presence_enabled = true
 discord_client_id = "1496999428605612203"
+audio_output = "auto"
 ```
 
 You can use `~` in paths (e.g., `~/Downloads`), which will be expanded to your home directory.
