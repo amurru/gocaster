@@ -86,6 +86,32 @@ func run() error {
 	// repo (SQLiteRepo) satisfies the union PodcastRepository, hence each port.
 	podcastSvc := application.NewPodcastService(repo, repo, repo, fetcher, logger)
 
+	// Handle CLI subcommands before starting the TUI.
+	args := os.Args
+	if len(args) > 1 {
+		switch args[1] {
+		case "export-opml":
+			if len(args) != 3 {
+				return fmt.Errorf("usage: gocaster export-opml <file>")
+			}
+			return podcastSvc.ExportSubscriptions(ctx, args[2])
+
+		case "import-opml":
+			if len(args) != 3 {
+				return fmt.Errorf("usage: gocaster import-opml <file>")
+			}
+			result, err := podcastSvc.ImportSubscriptions(ctx, args[2])
+			if err != nil {
+				return err
+			}
+			fmt.Printf("Imported %d subscriptions (skipped %d, failed %d)\n", result.Added, result.Skipped, result.Failed)
+			for _, f := range result.Failures {
+				fmt.Fprintf(os.Stderr, "  failed: %s — %v\n", f.FeedURL, f.Err)
+			}
+			return nil
+		}
+	}
+
 	downloadSvc := application.NewDownloadService(repo, repo, repo, repo, cfg.DownloadPath, logger)
 	// Parent every per-job download context from the root so cancelling the
 	// root (shutdown / Ctrl-C) cancels every in-flight download (issue #11).

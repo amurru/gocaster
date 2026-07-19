@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"os"
 	"time"
 
 	"github.com/amurru/gocaster/internal/domain"
@@ -38,6 +39,20 @@ type RefreshFailure struct {
 	Title     string
 	FeedURL   string
 	Err       error
+}
+
+// ImportResult describes the outcome of importing an OPML file.
+type ImportResult struct {
+	Added    int
+	Skipped  int
+	Failed   int
+	Failures []FeedFailure
+}
+
+// FeedFailure describes a single per-feed failure during OPML import.
+type FeedFailure struct {
+	FeedURL string
+	Err     error
 }
 
 // NewPodcastService accepts only the focused repository ports PodcastService
@@ -154,6 +169,68 @@ func (s *PodcastService) RefreshAllPodcasts(ctx context.Context) (RefreshAllResu
 		}
 		result.Refreshed++
 		result.NewEpisodes += newCount
+	}
+
+	return result, nil
+}
+
+// ExportSubscriptions writes all subscribed podcasts to path in OPML format.
+func (s *PodcastService) ExportSubscriptions(ctx context.Context, path string) error {
+	podcasts, err := s.ListPodcasts(ctx)
+	if err != nil {
+		return err
+	}
+
+	data, err := ExportOPML(podcasts)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path, data, 0644)
+}
+
+// ImportSubscriptions reads an OPML file from path and subscribes to every feed
+// that is not already subscribed. Existing subscriptions are skipped.
+func (s *PodcastService) ImportSubscriptions(ctx context.Context, path string) (ImportResult, error) {
+	var result ImportResult
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return result, err
+	}
+
+	urls, err := ImportOPML(data)
+	if err != nil {
+		return result, err
+	}
+
+	podcasts, err := s.podcasts.FindAll(ctx)
+	if err != nil {
+		return result, err
+	}
+
+	existing := make(map[string]struct{}, len(podcasts))
+	for _, podcast := range podcasts {
+		existing[podcast.FeedURL] = struct{}{}
+	}
+
+	for _, url := range urls {
+		if _, ok := existing[url]; ok {
+			result.Skipped++
+			continue
+		}
+
+		if _, err := s.AddPodcast(ctx, url); err != nil {
+			result.Failed++
+			result.Failures = append(result.Failures, FeedFailure{
+				FeedURL: url,
+				Err:     err,
+			})
+			continue
+		}
+
+		existing[url] = struct{}{}
+		result.Added++
 	}
 
 	return result, nil
