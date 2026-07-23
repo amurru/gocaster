@@ -16,6 +16,7 @@ type PlaybackStatus struct {
 	PositionSec float64
 	DurationSec float64
 	ProgressPct float64
+	Speed       float64
 	Source      string
 	CanSeek     bool
 	LastError   string
@@ -40,6 +41,9 @@ type Player interface {
 	TogglePause(ctx context.Context) error
 
 	Seek(ctx context.Context, seconds float64) error
+
+	SetSpeed(ctx context.Context, speed float64) error
+	GetSpeed(ctx context.Context) float64
 
 	Status(ctx context.Context) (PlaybackStatus, error)
 

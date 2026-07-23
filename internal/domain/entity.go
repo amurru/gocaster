@@ -3,12 +3,22 @@ package domain
 import "time"
 
 type Podcast struct {
-	ID          int64
-	Title       string
-	FeedURL     string
-	Description string
-	ImageURL    string
-	LastUpdated time.Time
+	ID           int64
+	Title        string
+	FeedURL      string
+	Description  string
+	ImageURL     string
+	LastUpdated  time.Time
+	ETag         string
+	LastModified string
+}
+
+// FeedHeaders holds the HTTP conditional-request headers returned by a feed
+// server. The FeedParser interface passes these through so callers can persist
+// them and send them back on the next refresh (issue #23).
+type FeedHeaders struct {
+	ETag         string
+	LastModified string
 }
 
 type Episode struct {
@@ -46,6 +56,7 @@ type DownloadJob struct {
 	LastModified    string
 	SupportsResume  bool
 	ErrorMessage    string
+	SHA256          string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }

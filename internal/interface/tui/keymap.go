@@ -26,6 +26,8 @@ type keyMap struct {
 	StartDownload     key.Binding
 	RetryDownload     key.Binding
 	Settings          key.Binding
+	SpeedDown         key.Binding
+	SpeedUp           key.Binding
 }
 
 func defaultKeyMap() keyMap {
@@ -59,7 +61,7 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("p", "player"),
 		),
 		TogglePlayPause: key.NewBinding(
-			key.WithKeys(" "),
+			key.WithKeys("space"),
 			key.WithHelp("space", "play/pause"),
 		),
 		SkipBackward: key.NewBinding(
@@ -75,7 +77,7 @@ func defaultKeyMap() keyMap {
 			key.WithHelp("t", "seek to time"),
 		),
 		PlayEpisode: key.NewBinding(
-			key.WithKeys("enter", " "),
+			key.WithKeys("enter", "space"),
 			key.WithHelp("enter/space", "play"),
 		),
 		NextEpisode: key.NewBinding(
@@ -122,6 +124,14 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("S"),
 			key.WithHelp("S", "settings"),
 		),
+		SpeedDown: key.NewBinding(
+			key.WithKeys("["),
+			key.WithHelp("[", "slower"),
+		),
+		SpeedUp: key.NewBinding(
+			key.WithKeys("]"),
+			key.WithHelp("]", "faster"),
+		),
 	}
 }
 
@@ -151,7 +161,7 @@ func (k keyMap) FooterShortcuts(state string, focus string) []key.Binding {
 	case "help":
 		return []key.Binding{k.Close, k.ToggleHelp}
 	case "player":
-		return []key.Binding{k.Close, k.TogglePlayPause, k.SkipBackward, k.SkipForward, k.SeekToTime, k.ToggleHelp, k.Quit}
+		return []key.Binding{k.Close, k.TogglePlayPause, k.SkipBackward, k.SkipForward, k.SeekToTime, k.SpeedDown, k.SpeedUp, k.ToggleHelp, k.Quit}
 	case "player_seek":
 		return []key.Binding{k.Close, k.Submit, k.ToggleHelp, k.Quit}
 	case "settings":

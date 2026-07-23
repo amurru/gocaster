@@ -134,6 +134,14 @@ func (s *PlayerService) Seek(ctx context.Context, seconds float64) error {
 	return s.player.Seek(ctx, seconds)
 }
 
+func (s *PlayerService) SetSpeed(ctx context.Context, speed float64) error {
+	return s.player.SetSpeed(ctx, speed)
+}
+
+func (s *PlayerService) GetSpeed(ctx context.Context) float64 {
+	return s.player.GetSpeed(ctx)
+}
+
 func (s *PlayerService) SeekTo(ctx context.Context, seconds float64) error {
 	return s.player.Seek(ctx, seconds)
 }

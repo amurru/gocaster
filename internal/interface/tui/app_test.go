@@ -22,8 +22,8 @@ type tuiMockFeedParser struct {
 	err      error
 }
 
-func (m tuiMockFeedParser) Parse(context.Context, string) (*domain.Podcast, []domain.Episode, error) {
-	return m.podcast, m.episodes, m.err
+func (m tuiMockFeedParser) Parse(context.Context, string, domain.FeedHeaders) (*domain.Podcast, []domain.Episode, domain.FeedHeaders, error) {
+	return m.podcast, m.episodes, domain.FeedHeaders{}, m.err
 }
 
 type tuiMockPlayer struct {
@@ -79,6 +79,15 @@ func (m *tuiMockPlayer) Status(ctx context.Context) (domain.PlaybackStatus, erro
 
 func (m *tuiMockPlayer) Close(ctx context.Context) error {
 	return nil
+}
+
+func (m *tuiMockPlayer) SetSpeed(ctx context.Context, speed float64) error {
+	m.status.Speed = speed
+	return nil
+}
+
+func (m *tuiMockPlayer) GetSpeed(ctx context.Context) float64 {
+	return m.status.Speed
 }
 
 func newTestModel(t *testing.T) Model {

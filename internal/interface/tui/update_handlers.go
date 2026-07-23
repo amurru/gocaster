@@ -144,6 +144,26 @@ func (m Model) handlePlayerMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Model,
 		return m, tea.Batch(cmds...)
 	}
 
+	if key.Matches(msg, m.keys.SpeedDown) {
+		if m.playbackStatus.State == domain.PlaybackStateStopped {
+			m.setStatus("No episode is playing", "warning")
+			return m, tea.Batch(cmds...)
+		}
+		newSpeed := nextSpeedDown(m.playbackStatus.Speed)
+		cmds = append(cmds, m.setPlaybackSpeed(newSpeed))
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.SpeedUp) {
+		if m.playbackStatus.State == domain.PlaybackStateStopped {
+			m.setStatus("No episode is playing", "warning")
+			return m, tea.Batch(cmds...)
+		}
+		newSpeed := nextSpeedUp(m.playbackStatus.Speed)
+		cmds = append(cmds, m.setPlaybackSpeed(newSpeed))
+		return m, tea.Batch(cmds...)
+	}
+
 	var noteCmd tea.Cmd
 	m.playerNotes, noteCmd = m.playerNotes.Update(msg)
 	if noteCmd != nil {

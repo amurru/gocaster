@@ -607,8 +607,6 @@ func TestSQLiteRepo_CompleteDownload(t *testing.T) {
 	}
 }
 
-
-
 func seedPodcastEpisode(t *testing.T, repo *SQLiteRepo) (podcastID, episodeID int64) {
 	t.Helper()
 	ctx := context.Background()
@@ -627,8 +625,6 @@ func seedPodcastEpisode(t *testing.T, repo *SQLiteRepo) (podcastID, episodeID in
 	}
 	return podcast.ID, episode.ID
 }
-
-
 
 func TestSQLiteRepo_SaveDownloadJob(t *testing.T) {
 	ctx := context.Background()

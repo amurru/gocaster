@@ -72,6 +72,21 @@ var migrations = []migration{
 	// 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_episodes_guid ON episodes(guid) WHERE guid IS NOT NULL`,
 	// 	},
 	// },
+	{
+		version: 2,
+		name:    "add_feed_conditional_headers",
+		up: []string{
+			`ALTER TABLE podcasts ADD COLUMN etag TEXT`,
+			`ALTER TABLE podcasts ADD COLUMN last_modified TEXT`,
+		},
+	},
+	{
+		version: 3,
+		name:    "add_download_sha256",
+		up: []string{
+			`ALTER TABLE downloads ADD COLUMN sha256 TEXT DEFAULT ''`,
+		},
+	},
 }
 
 // RunMigrations applies all pending schema migrations to the database.

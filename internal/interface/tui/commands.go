@@ -138,3 +138,13 @@ func (m Model) seekPlaybackTo(positionSec float64) tea.Cmd {
 		return playbackSeekedMsg{positionSec: positionSec, err: err}
 	}
 }
+
+func (m Model) setPlaybackSpeed(speed float64) tea.Cmd {
+	return func() tea.Msg {
+		if m.playerService == nil {
+			return playbackSpeedChangedMsg{speed: speed, err: fmt.Errorf("player is unavailable")}
+		}
+		err := m.playerService.SetSpeed(m.ctx, speed)
+		return playbackSpeedChangedMsg{speed: speed, err: err}
+	}
+}

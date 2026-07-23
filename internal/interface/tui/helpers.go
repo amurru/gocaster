@@ -197,3 +197,28 @@ func findThemeIndex(themeName string, themeList []string) int {
 	}
 	return 0 // default to first theme
 }
+
+// speedSteps defines the allowed playback speed values in ascending order.
+var speedSteps = []float64{0.75, 1.0, 1.25, 1.5, 1.75, 2.0}
+
+// nextSpeedUp returns the next higher speed step from the current speed.
+// If current is already at the maximum, it stays at the maximum.
+func nextSpeedUp(current float64) float64 {
+	for _, s := range speedSteps {
+		if s > current+0.001 {
+			return s
+		}
+	}
+	return speedSteps[len(speedSteps)-1]
+}
+
+// nextSpeedDown returns the next lower speed step from the current speed.
+// If current is already at the minimum, it stays at the minimum.
+func nextSpeedDown(current float64) float64 {
+	for i := len(speedSteps) - 1; i >= 0; i-- {
+		if speedSteps[i] < current-0.001 {
+			return speedSteps[i]
+		}
+	}
+	return speedSteps[0]
+}

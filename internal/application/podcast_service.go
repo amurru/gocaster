@@ -2,17 +2,30 @@ package application
 
 import (
 	"context"
+	"errors"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/amurru/gocaster/internal/domain"
+	"golang.org/x/sync/errgroup"
 )
+
+// DefaultConcurrency is the default number of concurrent feed refreshes.
+const DefaultConcurrency = 5
+
+// ErrFeedNotModified is returned by FeedParser.Parse when the server responds
+// with 304 Not Modified (issue #23).
+var ErrFeedNotModified = errors.New("feed not modified")
 
 // FeedParser is the application port for fetching an RSS feed. Parse takes a
 // context.Context so a cancelled caller cancels the underlying HTTP request
-// (issue #11).
+// (issue #11). The conditional parameter carries previously-stored ETag /
+// Last-Modified headers; when the server responds 304, Parse returns
+// ErrFeedNotModified with the (possibly refreshed) FeedHeaders but nil
+// podcast/episodes (issue #23).
 type FeedParser interface {
-	Parse(ctx context.Context, url string) (*domain.Podcast, []domain.Episode, error)
+	Parse(ctx context.Context, url string, conditional domain.FeedHeaders) (*domain.Podcast, []domain.Episode, domain.FeedHeaders, error)
 }
 
 type PodcastService struct {
@@ -82,8 +95,7 @@ func NewPodcastService(
 // with all of its episodes in a single transaction (issue #13): all-or-nothing,
 // so a mid-loop failure leaves no partial episode set behind.
 func (s *PodcastService) AddPodcast(ctx context.Context, rssUrl string) (*domain.Podcast, error) {
-	// fetch metadata from rss feed
-	podcast, episodes, err := s.fetcher.Parse(ctx, rssUrl)
+	podcast, episodes, _, err := s.fetcher.Parse(ctx, rssUrl, domain.FeedHeaders{})
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +125,20 @@ func (s *PodcastService) RefreshPodcast(ctx context.Context, podcastID int64) (i
 		return 0, err
 	}
 
-	_, fetchedEpisodes, err := s.fetcher.Parse(ctx, podcast.FeedURL)
+	conditional := domain.FeedHeaders{
+		ETag:         podcast.ETag,
+		LastModified: podcast.LastModified,
+	}
+
+	_, fetchedEpisodes, headers, err := s.fetcher.Parse(ctx, podcast.FeedURL, conditional)
+	if errors.Is(err, ErrFeedNotModified) {
+		if headers.ETag != "" || headers.LastModified != "" {
+			if updateErr := s.podcasts.UpdateFeedHeaders(ctx, podcast.ID, headers.ETag, headers.LastModified); updateErr != nil {
+				return 0, updateErr
+			}
+		}
+		return 0, nil
+	}
 	if err != nil {
 		return 0, err
 	}
@@ -135,10 +160,9 @@ func (s *PodcastService) RefreshPodcast(ctx context.Context, podcastID int64) (i
 		newEpisodes = append(newEpisodes, fetchedEpisodes[i])
 	}
 
-	// Persist the new episodes and the LastUpdated bump in a single transaction
-	// (issue #13): a mid-batch failure rolls back both, so the feed is retried in
-	// full next time rather than leaving a partial set with a stale LastUpdated.
 	podcast.LastUpdated = time.Now()
+	podcast.ETag = headers.ETag
+	podcast.LastModified = headers.LastModified
 	if err := s.batch.AppendEpisodesAndTouchPodcast(ctx, podcast, newEpisodes); err != nil {
 		return len(newEpisodes), err
 	}
@@ -147,28 +171,57 @@ func (s *PodcastService) RefreshPodcast(ctx context.Context, podcastID int64) (i
 }
 
 func (s *PodcastService) RefreshAllPodcasts(ctx context.Context) (RefreshAllResult, error) {
-	var result RefreshAllResult
+	return s.RefreshAllPodcastsWithConcurrency(ctx, DefaultConcurrency)
+}
+
+// RefreshAllPodcastsWithConcurrency refreshes all subscribed podcasts using up
+// to concurrency parallel goroutines. Per-feed errors are collected, not fatal.
+func (s *PodcastService) RefreshAllPodcastsWithConcurrency(ctx context.Context, concurrency int) (RefreshAllResult, error) {
+	if concurrency <= 0 {
+		concurrency = DefaultConcurrency
+	}
 
 	podcasts, err := s.podcasts.FindAll(ctx)
 	if err != nil {
-		return result, err
+		return RefreshAllResult{}, err
 	}
 
+	var (
+		result RefreshAllResult
+		mu     sync.Mutex
+	)
+
 	result.TotalPodcasts = len(podcasts)
-	for _, podcast := range podcasts {
-		newCount, refreshErr := s.RefreshPodcast(ctx, podcast.ID)
-		if refreshErr != nil {
-			result.Failed++
-			result.Failures = append(result.Failures, RefreshFailure{
-				PodcastID: podcast.ID,
-				Title:     podcast.Title,
-				FeedURL:   podcast.FeedURL,
-				Err:       refreshErr,
-			})
-			continue
-		}
-		result.Refreshed++
-		result.NewEpisodes += newCount
+
+	g, ctx := errgroup.WithContext(ctx)
+	g.SetLimit(concurrency)
+
+	for i := range podcasts {
+		podcast := podcasts[i]
+		g.Go(func() error {
+			newCount, refreshErr := s.RefreshPodcast(ctx, podcast.ID)
+
+			mu.Lock()
+			defer mu.Unlock()
+
+			if refreshErr != nil {
+				result.Failed++
+				result.Failures = append(result.Failures, RefreshFailure{
+					PodcastID: podcast.ID,
+					Title:     podcast.Title,
+					FeedURL:   podcast.FeedURL,
+					Err:       refreshErr,
+				})
+			} else {
+				result.Refreshed++
+				result.NewEpisodes += newCount
+			}
+			return nil
+		})
+	}
+
+	if err := g.Wait(); err != nil {
+		return result, err
 	}
 
 	return result, nil

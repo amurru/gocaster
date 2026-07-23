@@ -128,13 +128,13 @@ func LoadOrCreate(logger domain.Logger) (Config, error) {
 // validAudioOutputs lists the accepted values for the audio_output config
 // field. "auto" lets mpv autodetect; all others pin a specific backend.
 var validAudioOutputs = map[string]bool{
-	"auto":       true,
-	"pulse":      true,
-	"pipewire":   true,
-	"alsa":       true,
-	"jack":       true,
-	"coreaudio":  true,
-	"null":       true,
+	"auto":      true,
+	"pulse":     true,
+	"pipewire":  true,
+	"alsa":      true,
+	"jack":      true,
+	"coreaudio": true,
+	"null":      true,
 }
 
 // normalizeAudioOutput trims surrounding whitespace and falls back to the

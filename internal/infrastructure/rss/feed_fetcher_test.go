@@ -2,11 +2,15 @@ package rss
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/amurru/gocaster/internal/application"
+	"github.com/amurru/gocaster/internal/domain"
 )
 
 func TestNewFeedFetcher(t *testing.T) {
@@ -116,7 +120,7 @@ func TestParseValidRSS(t *testing.T) {
 	defer srv.Close()
 
 	f := NewFeedFetcher()
-	podcast, episodes, err := f.Parse(context.Background(), srv.URL)
+	podcast, episodes, _, err := f.Parse(context.Background(), srv.URL, domain.FeedHeaders{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -161,7 +165,7 @@ func TestParseValidAtomFeed(t *testing.T) {
 	defer srv.Close()
 
 	f := NewFeedFetcher()
-	podcast, episodes, err := f.Parse(context.Background(), srv.URL)
+	podcast, episodes, _, err := f.Parse(context.Background(), srv.URL, domain.FeedHeaders{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -191,7 +195,7 @@ func TestParseEmptyFeed(t *testing.T) {
 	defer srv.Close()
 
 	f := NewFeedFetcher()
-	podcast, episodes, err := f.Parse(context.Background(), srv.URL)
+	podcast, episodes, _, err := f.Parse(context.Background(), srv.URL, domain.FeedHeaders{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -208,7 +212,7 @@ func TestParseMalformedXML(t *testing.T) {
 	defer srv.Close()
 
 	f := NewFeedFetcher()
-	_, _, err := f.Parse(context.Background(), srv.URL)
+	_, _, _, err := f.Parse(context.Background(), srv.URL, domain.FeedHeaders{})
 	if err == nil {
 		t.Fatal("expected error for malformed XML, got nil")
 	}
@@ -223,7 +227,7 @@ func TestParseServerReturnsNonXMLContentType(t *testing.T) {
 	defer srv.Close()
 
 	f := NewFeedFetcher()
-	_, _, err := f.Parse(context.Background(), srv.URL)
+	_, _, _, err := f.Parse(context.Background(), srv.URL, domain.FeedHeaders{})
 	_ = err
 }
 
@@ -232,7 +236,7 @@ func TestParseServerReturns404(t *testing.T) {
 	defer srv.Close()
 
 	f := NewFeedFetcher()
-	_, _, err := f.Parse(context.Background(), srv.URL)
+	_, _, _, err := f.Parse(context.Background(), srv.URL, domain.FeedHeaders{})
 	if err == nil {
 		t.Fatal("expected error for 404 response, got nil")
 	}
@@ -243,7 +247,7 @@ func TestParseServerReturns500(t *testing.T) {
 	defer srv.Close()
 
 	f := NewFeedFetcher()
-	_, _, err := f.Parse(context.Background(), srv.URL)
+	_, _, _, err := f.Parse(context.Background(), srv.URL, domain.FeedHeaders{})
 	if err == nil {
 		t.Fatal("expected error for 500 response, got nil")
 	}
@@ -257,7 +261,7 @@ func TestParseContextCancellation(t *testing.T) {
 	cancel()
 
 	f := NewFeedFetcher()
-	_, _, err := f.Parse(ctx, srv.URL)
+	_, _, _, err := f.Parse(ctx, srv.URL, domain.FeedHeaders{})
 	if err == nil {
 		t.Fatal("expected error for cancelled context, got nil")
 	}
@@ -271,7 +275,7 @@ func TestParseSlowServerTimeout(t *testing.T) {
 
 	ctx := context.Background()
 	f := NewFeedFetcher()
-	_, _, err := f.Parse(ctx, srv.URL)
+	_, _, _, err := f.Parse(ctx, srv.URL, domain.FeedHeaders{})
 	if err == nil {
 		t.Fatal("expected error for slow server, got nil")
 	}
@@ -292,7 +296,7 @@ func TestParseItemsWithoutPublishedDate(t *testing.T) {
 	defer srv.Close()
 
 	f := NewFeedFetcher()
-	podcast, episodes, err := f.Parse(context.Background(), srv.URL)
+	podcast, episodes, _, err := f.Parse(context.Background(), srv.URL, domain.FeedHeaders{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -336,7 +340,7 @@ func TestParseItemsWithITunesExtension(t *testing.T) {
 	defer srv.Close()
 
 	f := NewFeedFetcher()
-	_, episodes, err := f.Parse(context.Background(), srv.URL)
+	_, episodes, _, err := f.Parse(context.Background(), srv.URL, domain.FeedHeaders{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -463,7 +467,7 @@ func TestParseMultipleEnclosures(t *testing.T) {
 	defer srv.Close()
 
 	f := NewFeedFetcher()
-	_, episodes, err := f.Parse(context.Background(), srv.URL)
+	_, episodes, _, err := f.Parse(context.Background(), srv.URL, domain.FeedHeaders{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -492,7 +496,7 @@ func TestParseAllItemsSkippedNoEnclosures(t *testing.T) {
 	defer srv.Close()
 
 	f := NewFeedFetcher()
-	podcast, episodes, err := f.Parse(context.Background(), srv.URL)
+	podcast, episodes, _, err := f.Parse(context.Background(), srv.URL, domain.FeedHeaders{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -506,7 +510,7 @@ func TestParseAllItemsSkippedNoEnclosures(t *testing.T) {
 
 func TestParseInvalidURL(t *testing.T) {
 	f := NewFeedFetcher()
-	_, _, err := f.Parse(context.Background(), "http://localhost:0/nonexistent")
+	_, _, _, err := f.Parse(context.Background(), "http://localhost:0/nonexistent", domain.FeedHeaders{})
 	if err == nil {
 		t.Fatal("expected error for invalid URL, got nil")
 	}
@@ -528,7 +532,7 @@ func TestParseFeedWithEncodingIssues(t *testing.T) {
 	defer srv.Close()
 
 	f := NewFeedFetcher()
-	podcast, episodes, err := f.Parse(context.Background(), srv.URL)
+	podcast, episodes, _, err := f.Parse(context.Background(), srv.URL, domain.FeedHeaders{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -557,7 +561,7 @@ func TestParseFeedDescription(t *testing.T) {
 	defer srv.Close()
 
 	f := NewFeedFetcher()
-	podcast, episodes, err := f.Parse(context.Background(), srv.URL)
+	podcast, episodes, _, err := f.Parse(context.Background(), srv.URL, domain.FeedHeaders{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -566,5 +570,118 @@ func TestParseFeedDescription(t *testing.T) {
 	}
 	if episodes[0].Description != "Episode description" {
 		t.Errorf("episode Description = %q, want %q", episodes[0].Description, "Episode description")
+	}
+}
+
+func TestParseReturnsETagAndLastModified(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"abc123"`)
+		w.Header().Set("Last-Modified", "Mon, 01 Jan 2024 12:00:00 GMT")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(validRSSFeed))
+	}))
+	defer srv.Close()
+
+	f := NewFeedFetcher()
+	_, _, headers, err := f.Parse(context.Background(), srv.URL, domain.FeedHeaders{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if headers.ETag != `"abc123"` {
+		t.Errorf("ETag = %q, want %q", headers.ETag, `"abc123"`)
+	}
+	if headers.LastModified != "Mon, 01 Jan 2024 12:00:00 GMT" {
+		t.Errorf("LastModified = %q, want %q", headers.LastModified, "Mon, 01 Jan 2024 12:00:00 GMT")
+	}
+}
+
+func TestParseSendsIfNoneMatchHeader(t *testing.T) {
+	var receivedIfNoneMatch string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedIfNoneMatch = r.Header.Get("If-None-Match")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(validRSSFeed))
+	}))
+	defer srv.Close()
+
+	f := NewFeedFetcher()
+	conditional := domain.FeedHeaders{ETag: `"old-etag"`}
+	_, _, _, err := f.Parse(context.Background(), srv.URL, conditional)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if receivedIfNoneMatch != `"old-etag"` {
+		t.Errorf("If-None-Match = %q, want %q", receivedIfNoneMatch, `"old-etag"`)
+	}
+}
+
+func TestParseSendsIfModifiedSinceHeader(t *testing.T) {
+	var receivedIfModifiedSince string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedIfModifiedSince = r.Header.Get("If-Modified-Since")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(validRSSFeed))
+	}))
+	defer srv.Close()
+
+	f := NewFeedFetcher()
+	conditional := domain.FeedHeaders{LastModified: "Mon, 01 Jan 2024 12:00:00 GMT"}
+	_, _, _, err := f.Parse(context.Background(), srv.URL, conditional)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if receivedIfModifiedSince != "Mon, 01 Jan 2024 12:00:00 GMT" {
+		t.Errorf("If-Modified-Since = %q, want %q", receivedIfModifiedSince, "Mon, 01 Jan 2024 12:00:00 GMT")
+	}
+}
+
+func TestParse304ReturnsErrFeedNotModified(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"same-etag"`)
+		w.Header().Set("Last-Modified", "Mon, 01 Jan 2024 12:00:00 GMT")
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+
+	f := NewFeedFetcher()
+	conditional := domain.FeedHeaders{ETag: `"same-etag"`}
+	podcast, episodes, headers, err := f.Parse(context.Background(), srv.URL, conditional)
+	if !errors.Is(err, application.ErrFeedNotModified) {
+		t.Fatalf("expected ErrFeedNotModified, got %v", err)
+	}
+	if podcast != nil {
+		t.Errorf("expected nil podcast, got %v", podcast)
+	}
+	if episodes != nil {
+		t.Errorf("expected nil episodes, got %v", episodes)
+	}
+	if headers.ETag != `"same-etag"` {
+		t.Errorf("ETag = %q, want %q", headers.ETag, `"same-etag"`)
+	}
+	if headers.LastModified != "Mon, 01 Jan 2024 12:00:00 GMT" {
+		t.Errorf("LastModified = %q, want %q", headers.LastModified, "Mon, 01 Jan 2024 12:00:00 GMT")
+	}
+}
+
+func TestParseDoesNotSendHeadersWhenEmpty(t *testing.T) {
+	var receivedIfNoneMatch, receivedIfModifiedSince string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedIfNoneMatch = r.Header.Get("If-None-Match")
+		receivedIfModifiedSince = r.Header.Get("If-Modified-Since")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(validRSSFeed))
+	}))
+	defer srv.Close()
+
+	f := NewFeedFetcher()
+	_, _, _, err := f.Parse(context.Background(), srv.URL, domain.FeedHeaders{})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if receivedIfNoneMatch != "" {
+		t.Errorf("expected no If-None-Match header, got %q", receivedIfNoneMatch)
+	}
+	if receivedIfModifiedSince != "" {
+		t.Errorf("expected no If-Modified-Since header, got %q", receivedIfModifiedSince)
 	}
 }

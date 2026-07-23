@@ -110,6 +110,9 @@ func (m *mockPlayer) Close(ctx context.Context) error {
 	return nil
 }
 
+func (m *mockPlayer) SetSpeed(ctx context.Context, speed float64) error { return nil }
+func (m *mockPlayer) GetSpeed(ctx context.Context) float64              { return 1.0 }
+
 // mockRepo implements only the focused ports PlayerService consumes —
 // EpisodeRepo and PodcastRepo (issue #17). It no longer stubs the ~9
 // download-job methods the service never calls.
@@ -142,6 +145,9 @@ func (m *mockRepo) UpdateEpisodePlaybackState(ctx context.Context, id int64, isP
 func (m *mockRepo) Save(ctx context.Context, podcast *domain.Podcast) error { return nil }
 func (m *mockRepo) FindAll(ctx context.Context) ([]domain.Podcast, error)   { return nil, nil }
 func (m *mockRepo) Delete(ctx context.Context, id int64) error              { return nil }
+func (m *mockRepo) UpdateFeedHeaders(_ context.Context, _ int64, _ string, _ string) error {
+	return nil
+}
 func (m *mockRepo) SaveEpisode(ctx context.Context, episode *domain.Episode) error {
 	return nil
 }

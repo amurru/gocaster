@@ -130,6 +130,26 @@ func TestMigrations_existingDB_backwardCompatibility(t *testing.T) {
 	`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := db.Exec(`
+		CREATE TABLE downloads (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			episode_id INTEGER NOT NULL UNIQUE,
+			status TEXT NOT NULL DEFAULT 'queued',
+			bytes_downloaded INTEGER DEFAULT 0,
+			bytes_total INTEGER DEFAULT 0,
+			temp_path TEXT,
+			final_path TEXT,
+			etag TEXT,
+			last_modified TEXT,
+			supports_resume BOOLEAN DEFAULT 0,
+			error_message TEXT,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE
+		)
+	`); err != nil {
+		t.Fatal(err)
+	}
 
 	// Now run migrations - should not fail and should mark version 1 as applied
 	if err := RunMigrations(db); err != nil {
@@ -186,8 +206,8 @@ func TestMigrations_futureMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if count != 2 {
-		t.Errorf("expected 2 migrations recorded, got %d", count)
+	if count != len(migrations) {
+		t.Errorf("expected %d migrations recorded, got %d", len(migrations), count)
 	}
 
 	// Test table should exist

@@ -114,6 +114,11 @@ type playbackSeekedMsg struct {
 	err         error
 }
 
+type playbackSpeedChangedMsg struct {
+	speed float64
+	err   error
+}
+
 type allPodcastsSyncedMsg struct {
 	result application.RefreshAllResult
 	err    error

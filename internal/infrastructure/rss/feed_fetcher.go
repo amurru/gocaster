@@ -2,35 +2,74 @@ package rss
 
 import (
 	"context"
+	"fmt"
+	"io"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/amurru/gocaster/internal/application"
 	"github.com/amurru/gocaster/internal/domain"
 	"github.com/mmcdole/gofeed"
 )
 
-type FeedFetcher struct{}
-
-func NewFeedFetcher() *FeedFetcher {
-	return &FeedFetcher{}
+type FeedFetcher struct {
+	client *http.Client
 }
 
-func (f *FeedFetcher) Parse(ctx context.Context, url string) (*domain.Podcast, []domain.Episode, error) {
-	fp := gofeed.NewParser()
-	// Derive the request timeout from the caller's context so a cancelled
-	// caller (e.g. shutdown, or a shorter-lived TUI command) cancels the fetch
-	// immediately instead of waiting the full 10s. The 10s cap still bounds a
-	// slow server when the caller itself has no deadline (issue #11).
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+func NewFeedFetcher() *FeedFetcher {
+	return &FeedFetcher{
+		client: &http.Client{
+			Timeout: 10 * time.Second,
+		},
+	}
+}
 
-	feed, err := fp.ParseURLWithContext(url, ctx)
+func (f *FeedFetcher) Parse(ctx context.Context, url string, conditional domain.FeedHeaders) (*domain.Podcast, []domain.Episode, domain.FeedHeaders, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, domain.FeedHeaders{}, fmt.Errorf("create request: %w", err)
 	}
 
-	// Map gofeed structs to domain entities
+	req.Header.Set("User-Agent", "gocaster/1.0")
+	if conditional.ETag != "" {
+		req.Header.Set("If-None-Match", conditional.ETag)
+	}
+	if conditional.LastModified != "" {
+		req.Header.Set("If-Modified-Since", conditional.LastModified)
+	}
+
+	resp, err := f.client.Do(req)
+	if err != nil {
+		return nil, nil, domain.FeedHeaders{}, err
+	}
+	defer resp.Body.Close()
+
+	headers := domain.FeedHeaders{
+		ETag:         resp.Header.Get("ETag"),
+		LastModified: resp.Header.Get("Last-Modified"),
+	}
+
+	if resp.StatusCode == http.StatusNotModified {
+		return nil, nil, headers, application.ErrFeedNotModified
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, nil, domain.FeedHeaders{}, fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, nil, domain.FeedHeaders{}, fmt.Errorf("read body: %w", err)
+	}
+
+	fp := gofeed.NewParser()
+	feed, err := fp.Parse(strings.NewReader(string(body)))
+	if err != nil {
+		return nil, nil, domain.FeedHeaders{}, err
+	}
+
 	podcast := &domain.Podcast{
 		Title:       feed.Title,
 		FeedURL:     url,
@@ -39,7 +78,6 @@ func (f *FeedFetcher) Parse(ctx context.Context, url string) (*domain.Podcast, [
 
 	episodes := make([]domain.Episode, 0, len(feed.Items))
 	for _, item := range feed.Items {
-		// Skip items without audio
 		if len(item.Enclosures) == 0 {
 			continue
 		}
@@ -50,19 +88,17 @@ func (f *FeedFetcher) Parse(ctx context.Context, url string) (*domain.Podcast, [
 			AudioURL:    item.Enclosures[0].URL,
 		}
 
-		// Parse published date safely
 		if item.PublishedParsed != nil {
 			episode.PublishedAt = *item.PublishedParsed
 		}
 
-		// Parse duration from iTunes extension if available
 		if item.ITunesExt != nil && item.ITunesExt.Duration != "" {
 			episode.PlaybackDuration = parseDuration(item.ITunesExt.Duration)
 		}
 
 		episodes = append(episodes, episode)
 	}
-	return podcast, episodes, nil
+	return podcast, episodes, headers, nil
 }
 
 // parseDuration converts an iTunes duration string to seconds. Supported

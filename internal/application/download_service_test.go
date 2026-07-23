@@ -1763,14 +1763,14 @@ func TestRetryOrQueue_SecondEpisodeQueuedWhileFirstDownloading(t *testing.T) {
 
 type failingJobRepo struct {
 	domain.DownloadJobRepo
-	failCountNonFailed       bool
-	failUpdateStatus         bool
-	failFindAll              bool
-	failUpdateProgress       bool
-	failSave                 bool
-	failFindByID             bool
-	failFindByEpisodeID      bool
-	failDelete               bool
+	failCountNonFailed  bool
+	failUpdateStatus    bool
+	failFindAll         bool
+	failUpdateProgress  bool
+	failSave            bool
+	failFindByID        bool
+	failFindByEpisodeID bool
+	failDelete          bool
 }
 
 func (r *failingJobRepo) CountNonFailedJobs(ctx context.Context) (int, error) {
@@ -1937,8 +1937,8 @@ func TestRetryJob_UpdateDownloadJobStatusError(t *testing.T) {
 		t.Fatalf("FindEpisodeByID failed: %v", err)
 	}
 	if err := repo.SaveDownloadJob(context.Background(), &domain.DownloadJob{
-		EpisodeID: episode.ID,
-		Status:    domain.DownloadStatusFailed,
+		EpisodeID:    episode.ID,
+		Status:       domain.DownloadStatusFailed,
 		ErrorMessage: "previous failure",
 	}); err != nil {
 		t.Fatalf("SaveDownloadJob failed: %v", err)

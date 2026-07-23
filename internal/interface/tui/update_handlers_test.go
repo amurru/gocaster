@@ -493,10 +493,10 @@ func TestUpdateDownloadJobsLoadedSuccess(t *testing.T) {
 	jobs := []application.DownloadJobView{
 		{
 			DownloadJob: domain.DownloadJob{
-				ID:          1,
-				EpisodeID:   10,
-				Status:      domain.DownloadStatusQueued,
-				BytesTotal:  1000,
+				ID:         1,
+				EpisodeID:  10,
+				Status:     domain.DownloadStatusQueued,
+				BytesTotal: 1000,
 			},
 			EpisodeTitle: "Episode 1",
 			PodcastTitle: "Podcast 1",

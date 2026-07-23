@@ -2,6 +2,8 @@ package application
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -590,6 +592,16 @@ func (s *DownloadService) runDownload(ctx context.Context, cleanup func(), jobID
 		return
 	}
 
+	h := sha256.New()
+	if job.BytesDownloaded > 0 && job.SupportsResume {
+		existingFile, err := os.Open(partPath)
+		if err == nil {
+			_, _ = io.Copy(h, existingFile)
+			existingFile.Close()
+		}
+	}
+	writer := io.MultiWriter(file, h)
+
 	// lastReported is the byte count at which we last persisted progress; we
 	// publish an update only once we cross progressInterval beyond it.
 	buf := make([]byte, 32*1024)
@@ -606,7 +618,7 @@ func (s *DownloadService) runDownload(ctx context.Context, cleanup func(), jobID
 	for {
 		n, readErr := body.Read(buf)
 		if n > 0 {
-			wn, writeErr := file.Write(buf[:n])
+			wn, writeErr := writer.Write(buf[:n])
 			if writeErr != nil {
 				s.failJob(ctx, job, fmt.Sprintf("write failed: %v", writeErr))
 				return
@@ -659,6 +671,8 @@ func (s *DownloadService) runDownload(ctx context.Context, cleanup func(), jobID
 	}
 
 	file.Close()
+
+	job.SHA256 = hex.EncodeToString(h.Sum(nil))
 
 	if err := os.Rename(partPath, finalPath); err != nil {
 		s.failJob(ctx, job, fmt.Sprintf("rename failed: %v", err))

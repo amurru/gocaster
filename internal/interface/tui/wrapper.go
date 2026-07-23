@@ -177,6 +177,9 @@ func (d DownloadJobItem) Description() string {
 	if errorMsg != "" {
 		parts = append(parts, errorMsg)
 	}
+	if d.SHA256 != "" {
+		parts = append(parts, "SHA256:"+d.SHA256[:8])
+	}
 	return strings.Join(parts, "  •  ")
 }
 

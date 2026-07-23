@@ -37,7 +37,10 @@ const (
     <method name="Pause"/>
     <method name="Stop"/>
     <method name="PlayPause"/>
-    <method name="Seek"/>
+    <method name="Seek">
+      <arg name="Offset" type="x" direction="in"/>
+      <arg name="PlayingAs" type="s" direction="in"/>
+    </method>
     <method name="SetPosition"/>
     <method name="Next"/>
     <method name="Previous"/>
@@ -458,22 +461,31 @@ func (b *mprisBroadcaster) Stop() *dbus.Error {
 	return nil
 }
 
-func (b *mprisBroadcaster) Seek(to int64) (int64, *dbus.Error) {
+// seekToPosition performs the actual MPV seek (internal helper).
+func (b *mprisBroadcaster) seekToPosition(positionUs int64) error {
 	b.mu.Lock()
 	ctrl := b.controller
 	b.mu.Unlock()
 	if ctrl != nil {
-		positionSec := float64(to) / 1e6
-		if err := ctrl.SeekTo(context.Background(), positionSec); err != nil {
-			return 0, dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
-		}
+		positionSec := float64(positionUs) / 1e6
+		return ctrl.SeekTo(context.Background(), positionSec)
 	}
-	return to, nil
+	return nil
+}
+
+// Seek implements org.mpris.MediaPlayer2.Player.Seek.
+func (b *mprisBroadcaster) Seek(offset int64, _ int) (int64, error) {
+	if err := b.seekToPosition(offset); err != nil {
+		return 0, err
+	}
+	return offset, nil
 }
 
 func (b *mprisBroadcaster) SetPosition(trackId string, position int64) *dbus.Error {
-	_, err := b.Seek(position)
-	return err
+	if err := b.seekToPosition(position); err != nil {
+		return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
+	}
+	return nil
 }
 
 func (b *mprisBroadcaster) Next() *dbus.Error {

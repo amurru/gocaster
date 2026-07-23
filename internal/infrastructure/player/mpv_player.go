@@ -273,6 +273,49 @@ func (p *MPVPlayer) Seek(ctx context.Context, seconds float64) error {
 	return nil
 }
 
+func (p *MPVPlayer) SetSpeed(ctx context.Context, speed float64) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	if p.mpv == nil {
+		return errors.New("libmpv not available")
+	}
+
+	if err := p.mpv.SetPropertyString("speed", fmt.Sprintf("%f", speed)); err != nil {
+		return fmt.Errorf("failed to set speed: %w", err)
+	}
+	p.debug("speed set", "speed", speed)
+	return nil
+}
+
+func (p *MPVPlayer) GetSpeed(ctx context.Context) float64 {
+	if ctx.Err() != nil {
+		return 1.0
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if ctx.Err() != nil {
+		return 1.0
+	}
+
+	if p.mpv == nil {
+		return 1.0
+	}
+
+	if val, err := p.mpv.GetProperty("speed", mpv.FormatDouble); err == nil {
+		return toFloat64(val)
+	}
+	return 1.0
+}
+
 func (p *MPVPlayer) Status(ctx context.Context) (domain.PlaybackStatus, error) {
 	if err := ctx.Err(); err != nil {
 		return domain.PlaybackStatus{State: domain.PlaybackStateError, LastError: err.Error()}, err
@@ -320,6 +363,12 @@ func (p *MPVPlayer) Status(ctx context.Context) (domain.PlaybackStatus, error) {
 
 	if status.DurationSec > 0 {
 		status.ProgressPct = (status.PositionSec / status.DurationSec) * 100
+	}
+
+	if spd, err := p.mpv.GetProperty("speed", mpv.FormatDouble); err == nil {
+		status.Speed = toFloat64(spd)
+	} else {
+		status.Speed = 1.0
 	}
 
 	return status, nil

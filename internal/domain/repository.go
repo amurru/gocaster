@@ -11,6 +11,7 @@ type PodcastRepo interface {
 	FindAll(ctx context.Context) ([]Podcast, error)
 	FindByID(ctx context.Context, id int64) (*Podcast, error)
 	Delete(ctx context.Context, id int64) error
+	UpdateFeedHeaders(ctx context.Context, id int64, etag string, lastModified string) error
 }
 
 // EpisodeRepo is the persistence port for episodes and the cross-concern of
