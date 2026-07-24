@@ -529,3 +529,71 @@ func (r *SQLiteRepo) CompleteDownload(ctx context.Context, episodeID int64, loca
 		return deleteDownloadJob(ctx, tx, jobID)
 	})
 }
+
+func (r *SQLiteRepo) SaveQueueItem(ctx context.Context, item *domain.QueueItem) error {
+	query := `
+		INSERT INTO playback_queue (episode_id, position, added_at)
+		VALUES (?, ?, ?)
+	`
+	result, err := r.db.ExecContext(ctx, query, item.EpisodeID, item.Position, item.AddedAt)
+	if err != nil {
+		return err
+	}
+
+	id, err := result.LastInsertId()
+	if err != nil {
+		return err
+	}
+
+	item.ID = id
+	return nil
+}
+
+func (r *SQLiteRepo) FindAllQueueItems(ctx context.Context) ([]domain.QueueItem, error) {
+	query := `SELECT id, episode_id, position, added_at FROM playback_queue ORDER BY position ASC`
+	rows, err := r.db.QueryContext(ctx, query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []domain.QueueItem
+	for rows.Next() {
+		var item domain.QueueItem
+		if err := rows.Scan(&item.ID, &item.EpisodeID, &item.Position, &item.AddedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+
+	return items, rows.Err()
+}
+
+func (r *SQLiteRepo) DeleteQueueItem(ctx context.Context, id int64) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM playback_queue WHERE id = ?`, id)
+	return err
+}
+
+func (r *SQLiteRepo) ClearQueue(ctx context.Context) error {
+	_, err := r.db.ExecContext(ctx, `DELETE FROM playback_queue`)
+	return err
+}
+
+func (r *SQLiteRepo) GetQueueState(ctx context.Context) (*domain.QueueState, error) {
+	query := `SELECT current_index, repeat_mode, shuffle FROM playback_queue_state WHERE id = 1`
+	var state domain.QueueState
+	err := r.db.QueryRowContext(ctx, query).Scan(&state.CurrentIndex, &state.RepeatMode, &state.Shuffle)
+	if err == sql.ErrNoRows {
+		return &domain.QueueState{RepeatMode: domain.RepeatNone}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &state, nil
+}
+
+func (r *SQLiteRepo) SaveQueueState(ctx context.Context, state *domain.QueueState) error {
+	query := `INSERT OR REPLACE INTO playback_queue_state (id, current_index, repeat_mode, shuffle) VALUES (1, ?, ?, ?)`
+	_, err := r.db.ExecContext(ctx, query, state.CurrentIndex, state.RepeatMode, state.Shuffle)
+	return err
+}

@@ -87,6 +87,27 @@ var migrations = []migration{
 			`ALTER TABLE downloads ADD COLUMN sha256 TEXT DEFAULT ''`,
 		},
 	},
+	{
+		version: 4,
+		name:    "add_playback_queue",
+		up: []string{
+			`CREATE TABLE IF NOT EXISTS playback_queue (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				episode_id INTEGER NOT NULL,
+				position INTEGER NOT NULL,
+				added_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+				FOREIGN KEY (episode_id) REFERENCES episodes(id) ON DELETE CASCADE
+			)`,
+			`CREATE INDEX IF NOT EXISTS idx_playback_queue_position ON playback_queue(position)`,
+			`CREATE TABLE IF NOT EXISTS playback_queue_state (
+				id INTEGER PRIMARY KEY CHECK (id = 1),
+				current_index INTEGER NOT NULL DEFAULT 0,
+				repeat_mode TEXT NOT NULL DEFAULT 'none',
+				shuffle BOOLEAN NOT NULL DEFAULT 0
+			)`,
+			`INSERT OR IGNORE INTO playback_queue_state (id, current_index, repeat_mode, shuffle) VALUES (1, 0, 'none', 0)`,
+		},
+	},
 }
 
 // RunMigrations applies all pending schema migrations to the database.
