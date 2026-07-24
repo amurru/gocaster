@@ -362,9 +362,11 @@ func (m Model) renderPlaybackQueuePage() string {
 	m.playbackQueueList.SetSize(max(m.contentWidth()-4, 20), innerHeight)
 	body := m.playbackQueueList.View()
 
-	if len(m.playbackQueueList.Items()) == 0 {
+	if !m.playbackQueueLoaded {
+		body = m.theme.MutedText.Render("Loading queue...")
+	} else if len(m.playbackQueueList.Items()) == 0 {
 		body = m.theme.MutedText.Render(
-			"Queue is empty.\n\nPress 'a' on an episode to add it to the queue.",
+			"Queue is empty.\n\nPress 'e' on an episode to add it to the queue.",
 		)
 	}
 

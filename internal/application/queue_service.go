@@ -192,7 +192,7 @@ func (s *QueueService) Next(ctx context.Context) error {
 
 	nextIdx := s.state.CurrentIndex + 1
 
-	if s.state.Shuffle {
+	if s.state.Shuffle && s.state.RepeatMode != domain.RepeatOne {
 		nextIdx = s.randomNextIndex()
 	}
 
@@ -255,13 +255,16 @@ func (s *QueueService) playAtIndex(ctx context.Context, idx int) error {
 }
 
 func (s *QueueService) OnTrackEnded(ctx context.Context) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	// Quick check under read lock to avoid unnecessary Next() call.
+	s.mu.RLock()
+	empty := len(s.items) == 0
+	s.mu.RUnlock()
 
-	if len(s.items) == 0 {
+	if empty {
 		return nil
 	}
 
+	// Next() acquires its own write lock -- must not hold s.mu here.
 	return s.Next(ctx)
 }
 
@@ -276,6 +279,13 @@ func (s *QueueService) ToggleRepeat(ctx context.Context) error {
 		s.state.RepeatMode = domain.RepeatAll
 	case domain.RepeatAll:
 		s.state.RepeatMode = domain.RepeatNone
+	}
+
+	// Shuffle and RepeatOne are contradictory: RepeatOne means "stay here"
+	// while shuffle means "go somewhere random". Turn off shuffle when
+	// RepeatOne is activated so behaviour is never ambiguous.
+	if s.state.RepeatMode == domain.RepeatOne {
+		s.state.Shuffle = false
 	}
 
 	return s.queueRepo.SaveQueueState(ctx, &s.state)
@@ -364,6 +374,16 @@ func (s *QueueService) GetQueueWithEpisodes(ctx context.Context) ([]QueueItemVie
 	}
 
 	return views, nil
+}
+
+func (s *QueueService) CurrentEpisodeID() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if len(s.items) == 0 || s.state.CurrentIndex >= len(s.items) {
+		return 0
+	}
+	return s.items[s.state.CurrentIndex].EpisodeID
 }
 
 type QueueItemView struct {

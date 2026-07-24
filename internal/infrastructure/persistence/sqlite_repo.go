@@ -531,6 +531,15 @@ func (r *SQLiteRepo) CompleteDownload(ctx context.Context, episodeID int64, loca
 }
 
 func (r *SQLiteRepo) SaveQueueItem(ctx context.Context, item *domain.QueueItem) error {
+	if item.ID > 0 {
+		query := `
+			UPDATE playback_queue SET episode_id = ?, position = ?, added_at = ?
+			WHERE id = ?
+		`
+		_, err := r.db.ExecContext(ctx, query, item.EpisodeID, item.Position, item.AddedAt, item.ID)
+		return err
+	}
+
 	query := `
 		INSERT INTO playback_queue (episode_id, position, added_at)
 		VALUES (?, ?, ?)

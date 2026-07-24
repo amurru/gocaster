@@ -521,10 +521,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case playbackQueueLoadedMsg:
 		if msg.err != nil {
+			m.playbackQueueLoaded = true
 			m.setStatus("Failed to load playback queue", "error")
 			return m, tea.Batch(cmds...)
 		}
 		m.queueViews = msg.views
+		m.playbackQueueLoaded = true
 		items := make([]list.Item, len(msg.views))
 		for i, v := range msg.views {
 			items[i] = PlaybackQueueItem{

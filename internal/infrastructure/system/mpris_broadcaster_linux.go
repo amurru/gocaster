@@ -497,7 +497,10 @@ func (b *mprisBroadcaster) Next() *dbus.Error {
 		return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{"no controller"})
 	}
 
-	if err := ctrl.Next(context.Background()); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := ctrl.Next(ctx); err != nil {
 		return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
 	}
 	return nil
@@ -512,7 +515,10 @@ func (b *mprisBroadcaster) Previous() *dbus.Error {
 		return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{"no controller"})
 	}
 
-	if err := ctrl.Previous(context.Background()); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := ctrl.Previous(ctx); err != nil {
 		return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
 	}
 	return nil

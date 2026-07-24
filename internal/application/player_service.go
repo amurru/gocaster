@@ -225,12 +225,44 @@ func (s *PlayerService) Next(ctx context.Context) error {
 	if s.queueSvc == nil {
 		return fmt.Errorf("queue not available")
 	}
-	return s.queueSvc.Next(ctx)
+	if err := s.queueSvc.Next(ctx); err != nil {
+		return err
+	}
+	return s.syncFromQueue(ctx)
 }
 
 func (s *PlayerService) Previous(ctx context.Context) error {
 	if s.queueSvc == nil {
 		return fmt.Errorf("queue not available")
 	}
-	return s.queueSvc.Previous(ctx)
+	if err := s.queueSvc.Previous(ctx); err != nil {
+		return err
+	}
+	return s.syncFromQueue(ctx)
+}
+
+func (s *PlayerService) syncFromQueue(ctx context.Context) error {
+	epID := s.queueSvc.CurrentEpisodeID()
+	if epID == 0 {
+		return nil
+	}
+
+	episode, err := s.episodes.FindEpisodeByID(ctx, epID)
+	if err != nil {
+		return fmt.Errorf("find episode after queue navigation: %w", err)
+	}
+
+	podcast, err := s.podcasts.FindByID(ctx, episode.PodcastID)
+	if err != nil {
+		return fmt.Errorf("find podcast after queue navigation: %w", err)
+	}
+
+	s.mu.Lock()
+	s.currentEpisode = episode
+	s.currentPodcast = podcast
+	s.lastEpisodeID = epID
+	s.mu.Unlock()
+
+	s.broadcastState(ctx)
+	return nil
 }

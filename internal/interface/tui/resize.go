@@ -180,6 +180,7 @@ func (m *Model) openDownloadsQueue() {
 
 func (m *Model) openPlaybackQueuePage() {
 	m.state = statePlaybackQueue
+	m.playbackQueueLoaded = false
 	m.setStatus("Playback queue opened", "info")
 }
 

@@ -218,6 +218,7 @@ type Model struct {
 	queueList       list.Model
 	playbackQueueList list.Model
 	queueViews        []application.QueueItemView
+	playbackQueueLoaded bool
 
 	playbackStatus     domain.PlaybackStatus
 	currentPodcast     *domain.Podcast
