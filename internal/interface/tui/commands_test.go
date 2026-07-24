@@ -90,7 +90,7 @@ func TestAddPodcastCommandSuccess(t *testing.T) {
 	}
 	ps := application.NewPodcastService(repo, repo, repo, feedParser, nil)
 	dl := application.NewDownloadService(repo, repo, repo, repo, "downloads", nil)
-	model := NewModel(context.Background(), ps, dl, nil, Settings{}, nil, "")
+	model := NewModel(context.Background(), ps, dl, nil, nil, Settings{}, nil, "")
 
 	msg := model.addPodcast("https://example.com/feed.xml")()
 	added, ok := msg.(podcastAddedMsg)
@@ -126,7 +126,7 @@ func TestRefreshPodcastCommandSuccess(t *testing.T) {
 	}
 	ps := application.NewPodcastService(repo, repo, repo, feedParser, nil)
 	dl := application.NewDownloadService(repo, repo, repo, repo, "downloads", nil)
-	model := NewModel(context.Background(), ps, dl, nil, Settings{}, nil, "")
+	model := NewModel(context.Background(), ps, dl, nil, nil, Settings{}, nil, "")
 
 	msg := model.refreshPodcast(podcast.ID)()
 	refreshed, ok := msg.(podcastRefreshedMsg)
@@ -274,7 +274,7 @@ func TestQueueDownloadCommandSuccess(t *testing.T) {
 
 	ps := application.NewPodcastService(repo, repo, repo, tuiMockFeedParser{}, nil)
 	dl := application.NewDownloadService(repo, repo, repo, repo, "downloads", nil)
-	model := NewModel(context.Background(), ps, dl, nil, Settings{}, nil, "")
+	model := NewModel(context.Background(), ps, dl, nil, nil, Settings{}, nil, "")
 
 	msg := model.queueDownload(episode.ID)()
 	queued, ok := msg.(downloadQueuedMsg)

@@ -102,10 +102,10 @@ func newTestModel(t *testing.T) Model {
 	podcastService := application.NewPodcastService(repo, repo, repo, tuiMockFeedParser{}, nil)
 	downloadService := application.NewDownloadService(repo, repo, repo, repo, "downloads", nil)
 	mockPlayer := &tuiMockPlayer{}
-	playerService := application.NewPlayerService(repo, repo, mockPlayer, nil, nil)
+	playerService := application.NewPlayerService(repo, repo, mockPlayer, nil, nil, nil)
 	settings := Settings{PeriodicSyncMins: 60}
 	save := func(Settings) error { return nil }
-	return NewModel(context.Background(), podcastService, downloadService, playerService, settings, save, "")
+	return NewModel(context.Background(), podcastService, downloadService, playerService, nil, settings, save, "")
 }
 
 func newPlayerTestModel(t *testing.T) (Model, *tuiMockPlayer, domain.Podcast, domain.Episode) {
@@ -120,10 +120,10 @@ func newPlayerTestModel(t *testing.T) (Model, *tuiMockPlayer, domain.Podcast, do
 	podcastService := application.NewPodcastService(repo, repo, repo, tuiMockFeedParser{}, nil)
 	downloadService := application.NewDownloadService(repo, repo, repo, repo, "downloads", nil)
 	mockPlayer := &tuiMockPlayer{}
-	playerService := application.NewPlayerService(repo, repo, mockPlayer, nil, nil)
+	playerService := application.NewPlayerService(repo, repo, mockPlayer, nil, nil, nil)
 	settings := Settings{PeriodicSyncMins: 60}
 	save := func(Settings) error { return nil }
-	model := NewModel(context.Background(), podcastService, downloadService, playerService, settings, save, "")
+	model := NewModel(context.Background(), podcastService, downloadService, playerService, nil, settings, save, "")
 
 	podcast := domain.Podcast{
 		ID:          7,
@@ -965,8 +965,8 @@ func TestModelDownloadJobsShowEpisodeTitles(t *testing.T) {
 
 	podcastService := application.NewPodcastService(repo, repo, repo, tuiMockFeedParser{}, nil)
 	downloadService := application.NewDownloadService(repo, repo, repo, repo, "downloads", nil)
-	playerService := application.NewPlayerService(repo, repo, &tuiMockPlayer{}, nil, nil)
-	model := NewModel(context.Background(), podcastService, downloadService, playerService, Settings{PeriodicSyncMins: 60}, func(Settings) error { return nil }, "")
+	playerService := application.NewPlayerService(repo, repo, &tuiMockPlayer{}, nil, nil, nil)
+	model := NewModel(context.Background(), podcastService, downloadService, playerService, nil, Settings{PeriodicSyncMins: 60}, func(Settings) error { return nil }, "")
 
 	// Seed a podcast + episode + queued download job.
 	podcast := &domain.Podcast{Title: "Test Pod", FeedURL: "https://example.com/p.xml"}
