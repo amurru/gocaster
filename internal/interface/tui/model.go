@@ -22,15 +22,16 @@ type viewState string
 type paneFocus string
 
 const (
-	stateBrowse      viewState = "browse"
-	stateAddPodcast  viewState = "add_podcast"
-	stateGoToEpisode viewState = "go_to_episode"
-	statePlayer      viewState = "player"
-	statePlayerSeek  viewState = "player_seek"
-	stateHelp        viewState = "help"
-	stateDownloads   viewState = "downloads"
-	stateSettings         viewState = "settings"
-	statePlaybackQueue    viewState = "playback_queue"
+	stateBrowse        viewState = "browse"
+	stateAddPodcast    viewState = "add_podcast"
+	stateGoToEpisode   viewState = "go_to_episode"
+	statePlayer        viewState = "player"
+	statePlayerSeek    viewState = "player_seek"
+	stateHelp          viewState = "help"
+	stateDownloads     viewState = "downloads"
+	stateSettings      viewState = "settings"
+	statePlaybackQueue viewState = "playback_queue"
+	stateShownotes     viewState = "shownotes"
 
 	focusLibrary paneFocus = "library"
 	focusDetail  paneFocus = "detail"
@@ -167,33 +168,34 @@ type Settings struct {
 }
 
 type Model struct {
-	podcastService   *application.PodcastService
-	downloadService  *application.DownloadService
-	playerService    *application.PlayerService
-	queueService     *application.QueueService
+	podcastService  *application.PodcastService
+	downloadService *application.DownloadService
+	playerService   *application.PlayerService
+	queueService    *application.QueueService
 	// ctx is the application root context. It is cancelled on shutdown so every
 	// in-flight service call (and the downloads it parents) observes
 	// cancellation (issue #11). tea.Cmd closures capture it via the Model value
 	// they close over.
 	ctx context.Context
 
-	state         viewState
-	keys          keyMap
-	theme         styles.Theme
-	help          help.Model
-	list          list.Model
-	epList        list.Model
-	detail        viewport.Model
-	playerNotes   viewport.Model
-	guide         viewport.Model
-	input         textinput.Model
-	goToInput     textinput.Model
-	seekInput     textinput.Model
-	intervalInput textinput.Model
-	discordInput  textinput.Model
-	spin          spinner.Model
-	status        string
-	kind          string
+	state             viewState
+	keys              keyMap
+	theme             styles.Theme
+	help              help.Model
+	list              list.Model
+	epList            list.Model
+	detail            viewport.Model
+	playerNotes       viewport.Model
+	guide             viewport.Model
+	shownotesViewport viewport.Model
+	input             textinput.Model
+	goToInput         textinput.Model
+	seekInput         textinput.Model
+	intervalInput     textinput.Model
+	discordInput      textinput.Model
+	spin              spinner.Model
+	status            string
+	kind              string
 
 	width  int
 	height int
@@ -214,10 +216,10 @@ type Model struct {
 	sortOrder       episodeSortOrder
 	previousState   viewState
 
-	downloadJobs    []application.DownloadJobView
-	queueList       list.Model
-	playbackQueueList list.Model
-	queueViews        []application.QueueItemView
+	downloadJobs        []application.DownloadJobView
+	queueList           list.Model
+	playbackQueueList   list.Model
+	queueViews          []application.QueueItemView
 	playbackQueueLoaded bool
 
 	playbackStatus     domain.PlaybackStatus
@@ -286,6 +288,12 @@ func NewModel(
 	guideViewport.MouseWheelEnabled = true
 	guideViewport.MouseWheelDelta = 2
 
+	shownotesViewport := viewport.New(viewport.WithWidth(0), viewport.WithHeight(0))
+	shownotesViewport.SoftWrap = true
+	shownotesViewport.FillHeight = true
+	shownotesViewport.MouseWheelEnabled = true
+	shownotesViewport.MouseWheelDelta = 2
+
 	input := textinput.New()
 	input.Prompt = ""
 	input.Placeholder = "https://example.com/feed.xml"
@@ -345,39 +353,40 @@ func NewModel(
 	playbackQueueList.SetStatusBarItemName("item", "items")
 
 	return Model{
-		podcastService:  svc,
-		downloadService: dsvc,
-		playerService:   psvc,
-		queueService:    qsvc,
-		ctx:             ctx,
-		state:           stateBrowse,
-		keys:            defaultKeyMap(),
-		theme:           theme,
-		help:            helpModel,
-		list:            podcastList,
-		epList:          episodeList,
-		queueList:          downloadQueueList,
-		playbackQueueList:  playbackQueueList,
-		detail:             detailViewport,
-		guide:           guideViewport,
-		playerNotes:     playerNotesViewport,
-		input:           input,
-		goToInput:       goToInput,
-		seekInput:       seekInput,
-		intervalInput:   intervalInput,
-		discordInput:    discordInput,
-		spin:            spin,
-		status:          "Ready",
-		kind:            "info",
-		loadingLibrary:  true,
-		focus:           focusLibrary,
-		selectedPodcast: nil,
-		episodes:        nil,
-		selectedEpisode: nil,
-		sortOrder:       sortNewestFirst,
-		settings:        settings,
-		saveSettings:    saveSettings,
-		customThemesDir: customThemesDir,
+		podcastService:    svc,
+		downloadService:   dsvc,
+		playerService:     psvc,
+		queueService:      qsvc,
+		ctx:               ctx,
+		state:             stateBrowse,
+		keys:              defaultKeyMap(),
+		theme:             theme,
+		help:              helpModel,
+		list:              podcastList,
+		epList:            episodeList,
+		queueList:         downloadQueueList,
+		playbackQueueList: playbackQueueList,
+		detail:            detailViewport,
+		guide:             guideViewport,
+		shownotesViewport: shownotesViewport,
+		playerNotes:       playerNotesViewport,
+		input:             input,
+		goToInput:         goToInput,
+		seekInput:         seekInput,
+		intervalInput:     intervalInput,
+		discordInput:      discordInput,
+		spin:              spin,
+		status:            "Ready",
+		kind:              "info",
+		loadingLibrary:    true,
+		focus:             focusLibrary,
+		selectedPodcast:   nil,
+		episodes:          nil,
+		selectedEpisode:   nil,
+		sortOrder:         sortNewestFirst,
+		settings:          settings,
+		saveSettings:      saveSettings,
+		customThemesDir:   customThemesDir,
 		themeList: func() []string {
 			themes := styles.GetAllThemes(customThemesDir)
 			return themes

@@ -52,6 +52,7 @@ func (m *Model) resize() {
 	m.syncDetailViewport(false)
 	m.syncGuideViewport(false)
 	m.syncPlayerViewport(false)
+	m.syncShownotesViewport(false)
 }
 
 func (m *Model) openAddModal() {
@@ -230,5 +231,17 @@ func (m *Model) syncPlayerViewport(reset bool) {
 	m.playerNotes.SetContent(m.renderPlayerNotesContent(width))
 	if reset {
 		m.playerNotes.GotoTop()
+	}
+}
+
+func (m *Model) syncShownotesViewport(reset bool) {
+	width := max(m.contentWidth()-8, 20)
+	height := max(m.bodyHeight-10, 6)
+
+	m.shownotesViewport.SetWidth(width)
+	m.shownotesViewport.SetHeight(height)
+	m.shownotesViewport.SetContent(m.renderShownotesContent(width))
+	if reset {
+		m.shownotesViewport.GotoTop()
 	}
 }

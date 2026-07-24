@@ -103,6 +103,14 @@ func (m Model) handlePlayerMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Model,
 		return m, tea.Batch(cmds...)
 	}
 
+	if key.Matches(msg, m.keys.OpenShownotes) {
+		m.previousState = m.state
+		m.state = stateShownotes
+		m.syncShownotesViewport(true)
+		m.setStatus("Shownotes opened", "info")
+		return m, tea.Batch(cmds...)
+	}
+
 	if key.Matches(msg, m.keys.SeekToTime) {
 		m.openPlayerSeekModal()
 		cmds = append(cmds, m.seekInput.Focus())
@@ -239,6 +247,32 @@ func (m *Model) handleDownloadsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Mo
 		cmds = append(cmds, queueCmd)
 	}
 
+	return m, tea.Batch(cmds...)
+}
+
+func (m *Model) handleShownotesMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.Close) {
+		m.state = m.previousState
+		if m.state == "" {
+			m.state = stateBrowse
+		}
+		m.setStatus("Returned to previous screen", "info")
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.ToggleHelp) {
+		m.previousState = m.state
+		m.state = stateHelp
+		m.syncGuideViewport(true)
+		m.setStatus("Help page opened.", "info")
+		return m, tea.Batch(cmds...)
+	}
+
+	var vpCmd tea.Cmd
+	m.shownotesViewport, vpCmd = m.shownotesViewport.Update(msg)
+	if vpCmd != nil {
+		cmds = append(cmds, vpCmd)
+	}
 	return m, tea.Batch(cmds...)
 }
 
