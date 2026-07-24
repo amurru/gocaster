@@ -31,6 +31,7 @@ type keyMap struct {
 	AddToQueue        key.Binding
 	AddPlayNext       key.Binding
 	OpenQueue         key.Binding
+	OpenShownotes     key.Binding
 	NextTrack         key.Binding
 	PrevTrack         key.Binding
 	CycleRepeat       key.Binding
@@ -152,6 +153,10 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("Q"),
 			key.WithHelp("Q", "queue"),
 		),
+		OpenShownotes: key.NewBinding(
+			key.WithKeys("o"),
+			key.WithHelp("o", "shownotes"),
+		),
 		NextTrack: key.NewBinding(
 			key.WithKeys("n"),
 			key.WithHelp("n", "next track"),
@@ -208,6 +213,8 @@ func (k keyMap) FooterShortcuts(state string, focus string) []key.Binding {
 		return []key.Binding{k.Close, k.Submit, k.Settings, k.ToggleHelp, k.Quit}
 	case "playback_queue":
 		return []key.Binding{k.Close, k.NextTrack, k.PrevTrack, k.CycleRepeat, k.ToggleShuffle, k.DeleteQueueItem, k.ToggleHelp, k.Quit}
+	case "shownotes":
+		return []key.Binding{k.Close, k.ToggleHelp, k.Quit}
 	default:
 		if focus == "detail" {
 			return []key.Binding{
@@ -216,6 +223,7 @@ func (k keyMap) FooterShortcuts(state string, focus string) []key.Binding {
 				k.DownloadEpisode,
 				k.GoToEpisode,
 				k.OpenPlayer,
+				k.OpenShownotes,
 				k.PlayEpisode,
 				k.Filter,
 				k.ToggleHelp,

@@ -7,6 +7,7 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/amurru/gocaster/internal/domain"
+	"github.com/amurru/gocaster/internal/infrastructure/html"
 	"github.com/amurru/gocaster/internal/interface/tui/components"
 )
 
@@ -374,6 +375,60 @@ func (m Model) renderPlaybackQueuePage() string {
 		Height(paneHeight).
 		MaxHeight(paneHeight).
 		Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
+}
+
+func (m Model) renderShownotesPage() string {
+	width := m.contentWidth()
+	panel := m.theme.PanelFocused.Width(max(width-4, 20))
+
+	episode := m.displayEpisode()
+	if episode == nil {
+		title := m.theme.SectionTitle.Render("Shownotes")
+		return panel.Render(lipgloss.JoinVertical(lipgloss.Left,
+			title,
+			"",
+			m.theme.MutedText.Render("No episode selected."),
+		))
+	}
+
+	podcastTitle := valueOrPlaceholder("")
+	if m.currentPodcast != nil && m.currentPodcast.Title != "" {
+		podcastTitle = m.currentPodcast.Title
+	} else if m.selectedPodcast != nil {
+		podcastTitle = m.selectedPodcast.Title
+	}
+
+	title := m.theme.SectionTitle.Render("Shownotes")
+	subtitle := m.theme.MutedText.Render(podcastTitle + " - " + episode.Title)
+
+	content := m.shownotesViewport.View()
+	if strings.TrimSpace(episode.Description) == "" {
+		content = m.theme.MutedText.Render("No episode notes available.")
+	}
+
+	return panel.Render(lipgloss.JoinVertical(lipgloss.Left,
+		title,
+		subtitle,
+		"",
+		content,
+	))
+}
+
+func (m Model) renderShownotesContent(width int) string {
+	episode := m.displayEpisode()
+	if episode == nil {
+		return ""
+	}
+	wrapWidth := max(width-4, 16)
+	description := strings.TrimSpace(episode.Description)
+	if description == "" {
+		return ""
+	}
+	content, err := html.ConvertToText(description)
+	if err != nil || strings.TrimSpace(content) == "" {
+		return m.theme.MutedText.Render("No episode notes available.")
+	}
+	return m.theme.Body.Render(lipgloss.Wrap(content, wrapWidth, ""))
 }
 
 func (m Model) renderGuideContent(width int) string {

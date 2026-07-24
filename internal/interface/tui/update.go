@@ -103,12 +103,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case key.Matches(msg, m.keys.ToggleHelp):
 			if m.state == stateHelp {
-				if m.previousState == "" {
-					m.previousState = stateBrowse
-				}
 				m.state = m.previousState
+				m.previousState = m.helpPreviousState
+				m.helpPreviousState = ""
 				m.setStatus("Returned to previous screen.", "info")
 			} else {
+				m.helpPreviousState = m.previousState
 				m.previousState = m.state
 				m.state = stateHelp
 				m.syncGuideViewport(true)
@@ -173,6 +173,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if m.state == statePlaybackQueue {
 			return m.handlePlaybackQueueMode(msg, cmds)
+		}
+
+		if m.state == stateShownotes {
+			return m.handleShownotesMode(msg, cmds)
 		}
 
 		isFiltering := m.list.FilterState() == list.Filtering ||
@@ -623,6 +627,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.openPlaybackQueuePage()
 					cmds = append(cmds, m.loadPlaybackQueueCmd(), m.spin.Tick)
 					return m, tea.Batch(cmds...)
+				}
+				if key.Matches(msg, m.keys.OpenShownotes) {
+					if selected := selectedEpisodeItem(m.epList); selected != nil {
+						m.previousState = m.state
+						m.state = stateShownotes
+						m.syncShownotesViewport(true)
+						m.setStatus("Shownotes opened", "info")
+						return m, tea.Batch(cmds...)
+					}
 				}
 			}
 		}
