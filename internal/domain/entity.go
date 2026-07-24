@@ -60,3 +60,27 @@ type DownloadJob struct {
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 }
+
+// RepeatMode controls playback queue repeat behavior.
+type RepeatMode string
+
+const (
+	RepeatNone RepeatMode = "none"
+	RepeatOne  RepeatMode = "one"
+	RepeatAll  RepeatMode = "all"
+)
+
+// QueueItem represents a single entry in the playback queue.
+type QueueItem struct {
+	ID        int64
+	EpisodeID int64
+	Position  int
+	AddedAt   time.Time
+}
+
+// QueueState holds the persistent playback queue state (single row).
+type QueueState struct {
+	CurrentIndex int
+	RepeatMode   RepeatMode
+	Shuffle      bool
+}

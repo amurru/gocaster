@@ -72,6 +72,20 @@ type DownloadCompletionRepo interface {
 	CompleteDownload(ctx context.Context, episodeID int64, localPath string, jobID int64) error
 }
 
+// QueueRepo is the persistence port for the playback queue (issue #21). Every
+// method takes a context.Context (issue #11).
+type QueueRepo interface {
+	// QueueItem CRUD
+	SaveQueueItem(ctx context.Context, item *QueueItem) error
+	FindAllQueueItems(ctx context.Context) ([]QueueItem, error)
+	DeleteQueueItem(ctx context.Context, id int64) error
+	ClearQueue(ctx context.Context) error
+
+	// Queue state (single-row: current index, repeat, shuffle)
+	GetQueueState(ctx context.Context) (*QueueState, error)
+	SaveQueueState(ctx context.Context, state *QueueState) error
+}
+
 // PodcastRepository is the union of the focused repository ports. It exists so
 // the concrete SQLiteRepo and the composition root (main.go) can keep depending
 // on a single type while individual services depend only on the narrow port they
@@ -82,4 +96,5 @@ type PodcastRepository interface {
 	DownloadJobRepo
 	PodcastBatchRepo
 	DownloadCompletionRepo
+	QueueRepo
 }
