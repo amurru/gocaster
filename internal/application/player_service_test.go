@@ -172,7 +172,7 @@ func TestPlayerServiceBroadcastsOnPlay(t *testing.T) {
 		},
 	}
 
-	svc := NewPlayerService(mr, mr, mp, mb, nil)
+	svc := NewPlayerService(mr, mr, mp, mb, nil, nil)
 
 	err := svc.PlayEpisode(ctx, 1)
 	if err != nil {
@@ -198,7 +198,7 @@ func TestPlayerServiceBroadcastsOnPause(t *testing.T) {
 	mb := &mockBroadcaster{}
 	mr := &mockRepo{}
 
-	svc := NewPlayerService(mr, mr, mp, mb, nil)
+	svc := NewPlayerService(mr, mr, mp, mb, nil, nil)
 
 	_ = svc.Pause(ctx)
 
@@ -213,7 +213,7 @@ func TestPlayerServiceBroadcastsOnStop(t *testing.T) {
 	mb := &mockBroadcaster{}
 	mr := &mockRepo{}
 
-	svc := NewPlayerService(mr, mr, mp, mb, nil)
+	svc := NewPlayerService(mr, mr, mp, mb, nil, nil)
 
 	_ = svc.StopPlayback(ctx)
 
@@ -235,7 +235,7 @@ func TestPlayerServiceReplaysLastEpisode(t *testing.T) {
 		},
 	}
 
-	svc := NewPlayerService(mr, mr, mp, mb, nil)
+	svc := NewPlayerService(mr, mr, mp, mb, nil, nil)
 
 	_ = svc.PlayEpisode(ctx, 1)
 
@@ -261,7 +261,7 @@ func TestPlayerServiceControllerPlaysLastWhenNonePlayed(t *testing.T) {
 	mb := &mockBroadcaster{}
 	mr := &mockRepo{}
 
-	svc := NewPlayerService(mr, mr, mp, mb, nil)
+	svc := NewPlayerService(mr, mr, mp, mb, nil, nil)
 
 	err := svc.Play(ctx, 0)
 	if err == nil {
@@ -282,7 +282,7 @@ func TestPlayerServiceInboundControl(t *testing.T) {
 		},
 	}
 
-	svc := NewPlayerService(mr, mr, mp, mb, nil)
+	svc := NewPlayerService(mr, mr, mp, mb, nil, nil)
 	_ = svc
 
 	mb.controller.Play(ctx, 1)
