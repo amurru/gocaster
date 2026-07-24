@@ -214,7 +214,8 @@ type Model struct {
 	episodes        []domain.Episode
 	selectedEpisode *domain.Episode
 	sortOrder       episodeSortOrder
-	previousState   viewState
+	previousState    viewState
+	helpPreviousState viewState
 
 	downloadJobs        []application.DownloadJobView
 	queueList           list.Model

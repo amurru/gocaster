@@ -260,14 +260,6 @@ func (m *Model) handleShownotesMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Mo
 		return m, tea.Batch(cmds...)
 	}
 
-	if key.Matches(msg, m.keys.ToggleHelp) {
-		m.previousState = m.state
-		m.state = stateHelp
-		m.syncGuideViewport(true)
-		m.setStatus("Help page opened.", "info")
-		return m, tea.Batch(cmds...)
-	}
-
 	var vpCmd tea.Cmd
 	m.shownotesViewport, vpCmd = m.shownotesViewport.Update(msg)
 	if vpCmd != nil {

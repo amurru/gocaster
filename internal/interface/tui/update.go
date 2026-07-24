@@ -103,12 +103,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case key.Matches(msg, m.keys.ToggleHelp):
 			if m.state == stateHelp {
-				if m.previousState == "" {
-					m.previousState = stateBrowse
-				}
 				m.state = m.previousState
+				m.previousState = m.helpPreviousState
+				m.helpPreviousState = ""
 				m.setStatus("Returned to previous screen.", "info")
 			} else {
+				m.helpPreviousState = m.previousState
 				m.previousState = m.state
 				m.state = stateHelp
 				m.syncGuideViewport(true)

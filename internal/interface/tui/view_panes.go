@@ -426,7 +426,7 @@ func (m Model) renderShownotesContent(width int) string {
 	}
 	content, err := html.ConvertToText(description)
 	if err != nil || strings.TrimSpace(content) == "" {
-		return ""
+		return m.theme.MutedText.Render("No episode notes available.")
 	}
 	return m.theme.Body.Render(lipgloss.Wrap(content, wrapWidth, ""))
 }
