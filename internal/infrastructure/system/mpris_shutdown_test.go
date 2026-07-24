@@ -37,8 +37,8 @@ func (s *stubController) Status(context.Context) (domain.PlaybackStatus, error) 
 	<-s.block
 	return domain.PlaybackStatus{State: domain.PlaybackStatePlaying}, nil
 }
-func (s *stubController) Next(context.Context) error      { return nil }
-func (s *stubController) Previous(context.Context) error  { return nil }
+func (s *stubController) Next(context.Context) error     { return nil }
+func (s *stubController) Previous(context.Context) error { return nil }
 
 // newTestBroadcaster builds a mprisBroadcaster without a real D-Bus connection
 // so the shutdown lifecycle (done channel + WaitGroup + nil-conn guards) can be

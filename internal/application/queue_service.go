@@ -36,12 +36,12 @@ func NewQueueService(
 	}
 
 	svc := &QueueService{
-		queueRepo: queueRepo,
-		episodes:  episodes,
-		podcasts:  podcasts,
-		player:    player,
+		queueRepo:   queueRepo,
+		episodes:    episodes,
+		podcasts:    podcasts,
+		player:      player,
 		broadcaster: broadcaster,
-		logger:    logger,
+		logger:      logger,
 	}
 
 	svc.loadFromDB(context.Background())

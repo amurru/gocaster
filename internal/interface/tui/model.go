@@ -209,12 +209,12 @@ type Model struct {
 	loadingDetail  bool
 	submitting     bool
 
-	focus           paneFocus
-	selectedPodcast *domain.Podcast
-	episodes        []domain.Episode
-	selectedEpisode *domain.Episode
-	sortOrder       episodeSortOrder
-	previousState    viewState
+	focus             paneFocus
+	selectedPodcast   *domain.Podcast
+	episodes          []domain.Episode
+	selectedEpisode   *domain.Episode
+	sortOrder         episodeSortOrder
+	previousState     viewState
 	helpPreviousState viewState
 
 	downloadJobs        []application.DownloadJobView
