@@ -171,6 +171,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.handlePlayerMode(msg, cmds)
 		}
 
+		if m.state == statePlaybackQueue {
+			return m.handlePlaybackQueueMode(msg, cmds)
+		}
+
 		isFiltering := m.list.FilterState() == list.Filtering ||
 			m.epList.FilterState() == list.Filtering
 
@@ -514,6 +518,68 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		)
 		cmds = append(cmds, m.fetchPlaybackStatus())
 		return m, tea.Batch(cmds...)
+
+	case playbackQueueLoadedMsg:
+		if msg.err != nil {
+			m.setStatus("Failed to load playback queue", "error")
+			return m, tea.Batch(cmds...)
+		}
+		m.queueViews = msg.views
+		items := make([]list.Item, len(msg.views))
+		for i, v := range msg.views {
+			items[i] = PlaybackQueueItem{
+				QueueItemView: v,
+				Theme:         m.theme,
+			}
+		}
+		cmds = append(cmds, m.playbackQueueList.SetItems(items))
+		m.setStatus(fmt.Sprintf("Queue loaded (%d items)", len(msg.views)), "success")
+		return m, tea.Batch(cmds...)
+
+	case queueItemAddedMsg:
+		if msg.err != nil {
+			m.setStatus(fmt.Sprintf("Add to queue failed: %v", msg.err), "error")
+		} else {
+			m.setStatus("Added to queue", "success")
+			cmds = append(cmds, m.loadPlaybackQueueCmd())
+		}
+		return m, tea.Batch(cmds...)
+
+	case queueItemRemovedMsg:
+		if msg.err != nil {
+			m.setStatus(fmt.Sprintf("Remove from queue failed: %v", msg.err), "error")
+		} else {
+			m.setStatus("Removed from queue", "success")
+			cmds = append(cmds, m.loadPlaybackQueueCmd())
+		}
+		return m, tea.Batch(cmds...)
+
+	case queueTrackChangedMsg:
+		if msg.err != nil {
+			m.setStatus(fmt.Sprintf("Track change failed: %v", msg.err), "error")
+		} else {
+			m.setStatus("Track changed", "success")
+			cmds = append(cmds, m.loadPlaybackQueueCmd(), m.fetchPlaybackStatus())
+		}
+		return m, tea.Batch(cmds...)
+
+	case repeatModeToggledMsg:
+		if msg.err != nil {
+			m.setStatus(fmt.Sprintf("Repeat toggle failed: %v", msg.err), "error")
+		} else {
+			m.setStatus("Repeat mode toggled", "success")
+			cmds = append(cmds, m.loadPlaybackQueueCmd())
+		}
+		return m, tea.Batch(cmds...)
+
+	case shuffleToggledMsg:
+		if msg.err != nil {
+			m.setStatus(fmt.Sprintf("Shuffle toggle failed: %v", msg.err), "error")
+		} else {
+			m.setStatus("Shuffle toggled", "success")
+			cmds = append(cmds, m.loadPlaybackQueueCmd())
+		}
+		return m, tea.Batch(cmds...)
 	}
 
 	if m.focus == focusDetail {
@@ -537,6 +603,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.openGoToEpisodeModal()
 				cmds = append(cmds, m.goToInput.Focus())
 				return m, tea.Batch(cmds...)
+			}
+
+			// Playback queue: add to queue, play next, open queue view
+			if m.state == stateBrowse && m.epList.FilterState() != list.Filtering {
+				if selected := selectedEpisodeItem(m.epList); selected != nil {
+					if key.Matches(msg, m.keys.AddToQueue) {
+						cmds = append(cmds, m.addToQueueCmd(selected.ID))
+						return m, tea.Batch(cmds...)
+					}
+					if key.Matches(msg, m.keys.AddPlayNext) {
+						cmds = append(cmds, m.addPlayNextCmd(selected.ID))
+						return m, tea.Batch(cmds...)
+					}
+				}
+				if key.Matches(msg, m.keys.OpenQueue) {
+					m.openPlaybackQueuePage()
+					cmds = append(cmds, m.loadPlaybackQueueCmd(), m.spin.Tick)
+					return m, tea.Batch(cmds...)
+				}
 			}
 		}
 

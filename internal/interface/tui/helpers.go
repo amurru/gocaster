@@ -37,6 +37,14 @@ func selectedDownloadJobItem(listModel list.Model) *DownloadJobItem {
 	return &job
 }
 
+func selectedPlaybackQueueItem(listModel list.Model) *PlaybackQueueItem {
+	item, ok := listModel.SelectedItem().(PlaybackQueueItem)
+	if !ok {
+		return nil
+	}
+	return &item
+}
+
 func (m Model) displayEpisode() *domain.Episode {
 	if m.currentEpisode != nil {
 		return m.currentEpisode
