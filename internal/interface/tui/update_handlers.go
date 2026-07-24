@@ -242,6 +242,49 @@ func (m *Model) handleDownloadsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Mo
 	return m, tea.Batch(cmds...)
 }
 
+func (m *Model) handlePlaybackQueueMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
+	if key.Matches(msg, m.keys.Close) {
+		m.state = stateBrowse
+		m.setStatus("Returned to library", "info")
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.NextTrack) {
+		cmds = append(cmds, m.nextTrackCmd())
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.PrevTrack) {
+		cmds = append(cmds, m.prevTrackCmd())
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.CycleRepeat) {
+		cmds = append(cmds, m.cycleRepeatCmd())
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.ToggleShuffle) {
+		cmds = append(cmds, m.toggleShuffleCmd())
+		return m, tea.Batch(cmds...)
+	}
+
+	if key.Matches(msg, m.keys.DeleteQueueItem) {
+		if selected := selectedPlaybackQueueItem(m.playbackQueueList); selected != nil {
+			cmds = append(cmds, m.removeFromQueueCmd(selected.QueueItemView.Item.ID))
+		}
+		return m, tea.Batch(cmds...)
+	}
+
+	var listCmd tea.Cmd
+	m.playbackQueueList, listCmd = m.playbackQueueList.Update(msg)
+	if listCmd != nil {
+		cmds = append(cmds, listCmd)
+	}
+
+	return m, tea.Batch(cmds...)
+}
+
 func (m Model) handleSettingsMode(msg tea.KeyPressMsg, cmds []tea.Cmd) (tea.Model, tea.Cmd) {
 	if m.editingInterval {
 		if key.Matches(msg, m.keys.Close) {

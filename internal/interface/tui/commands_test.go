@@ -90,7 +90,7 @@ func TestAddPodcastCommandSuccess(t *testing.T) {
 	}
 	ps := application.NewPodcastService(repo, repo, repo, feedParser, nil)
 	dl := application.NewDownloadService(repo, repo, repo, repo, "downloads", nil)
-	model := NewModel(context.Background(), ps, dl, nil, Settings{}, nil, "")
+	model := NewModel(context.Background(), ps, dl, nil, nil, Settings{}, nil, "")
 
 	msg := model.addPodcast("https://example.com/feed.xml")()
 	added, ok := msg.(podcastAddedMsg)
@@ -126,7 +126,7 @@ func TestRefreshPodcastCommandSuccess(t *testing.T) {
 	}
 	ps := application.NewPodcastService(repo, repo, repo, feedParser, nil)
 	dl := application.NewDownloadService(repo, repo, repo, repo, "downloads", nil)
-	model := NewModel(context.Background(), ps, dl, nil, Settings{}, nil, "")
+	model := NewModel(context.Background(), ps, dl, nil, nil, Settings{}, nil, "")
 
 	msg := model.refreshPodcast(podcast.ID)()
 	refreshed, ok := msg.(podcastRefreshedMsg)
@@ -274,7 +274,7 @@ func TestQueueDownloadCommandSuccess(t *testing.T) {
 
 	ps := application.NewPodcastService(repo, repo, repo, tuiMockFeedParser{}, nil)
 	dl := application.NewDownloadService(repo, repo, repo, repo, "downloads", nil)
-	model := NewModel(context.Background(), ps, dl, nil, Settings{}, nil, "")
+	model := NewModel(context.Background(), ps, dl, nil, nil, Settings{}, nil, "")
 
 	msg := model.queueDownload(episode.ID)()
 	queued, ok := msg.(downloadQueuedMsg)
@@ -529,4 +529,260 @@ func TestSeekPlaybackToCommandNoEpisode(t *testing.T) {
 // newSeededPodcastService creates a PodcastService backed by the given repo.
 func newSeededPodcastService(repo *persistence.SQLiteRepo) *application.PodcastService {
 	return application.NewPodcastService(repo, repo, repo, tuiMockFeedParser{}, nil)
+}
+
+// newQueueTestModel creates a Model with a real QueueService backed by an
+// in-memory SQLite repo, along with a seeded episode for queue commands.
+func newQueueTestModel(t *testing.T) (Model, *persistence.SQLiteRepo, domain.Episode) {
+	t.Helper()
+
+	repo, err := persistence.NewSQLiteRepo(":memory:")
+	if err != nil {
+		t.Fatalf("NewSQLiteRepo failed: %v", err)
+	}
+	t.Cleanup(func() { _ = repo.Close() })
+
+	podcast := &domain.Podcast{Title: "QueuePod", FeedURL: "https://example.com/q.xml"}
+	if err := repo.Save(context.Background(), podcast); err != nil {
+		t.Fatalf("Save podcast: %v", err)
+	}
+	episode := &domain.Episode{
+		PodcastID: podcast.ID,
+		Title:     "Queue Episode",
+		AudioURL:  "https://example.com/q.mp3",
+	}
+	if err := repo.SaveEpisode(context.Background(), episode); err != nil {
+		t.Fatalf("SaveEpisode: %v", err)
+	}
+
+	ps := application.NewPodcastService(repo, repo, repo, tuiMockFeedParser{}, nil)
+	dl := application.NewDownloadService(repo, repo, repo, repo, "downloads", nil)
+	qsvc := application.NewQueueService(repo, repo, repo, &tuiMockPlayer{}, nil, nil)
+	model := NewModel(context.Background(), ps, dl, nil, qsvc, Settings{}, nil, "")
+
+	return model, repo, *episode
+}
+
+func TestAddToQueueCmdSuccess(t *testing.T) {
+	model, _, episode := newQueueTestModel(t)
+
+	msg := model.addToQueueCmd(episode.ID)()
+	added, ok := msg.(queueItemAddedMsg)
+	if !ok {
+		t.Fatalf("expected queueItemAddedMsg, got %T", msg)
+	}
+	if added.err != nil {
+		t.Fatalf("expected no error, got %v", added.err)
+	}
+}
+
+func TestAddToQueueCmdNilService(t *testing.T) {
+	model := newTestModel(t)
+	model.queueService = nil
+
+	msg := model.addToQueueCmd(1)()
+	added, ok := msg.(queueItemAddedMsg)
+	if !ok {
+		t.Fatalf("expected queueItemAddedMsg, got %T", msg)
+	}
+	if added.err == nil {
+		t.Fatal("expected error when queue service is nil")
+	}
+	if added.err.Error() != "queue service is unavailable" {
+		t.Fatalf("expected 'queue service is unavailable', got %q", added.err.Error())
+	}
+}
+
+func TestAddPlayNextCmdSuccess(t *testing.T) {
+	model, _, episode := newQueueTestModel(t)
+
+	// Seed the queue so AddPlayNext has a non-empty slice to insert into.
+	if err := model.queueService.AddToQueue(context.Background(), episode.ID); err != nil {
+		t.Fatalf("seed queue: %v", err)
+	}
+
+	msg := model.addPlayNextCmd(episode.ID)()
+	added, ok := msg.(queueItemAddedMsg)
+	if !ok {
+		t.Fatalf("expected queueItemAddedMsg, got %T", msg)
+	}
+	if added.err != nil {
+		t.Fatalf("expected no error, got %v", added.err)
+	}
+}
+
+func TestAddPlayNextCmdNilService(t *testing.T) {
+	model := newTestModel(t)
+	model.queueService = nil
+
+	msg := model.addPlayNextCmd(1)()
+	added, ok := msg.(queueItemAddedMsg)
+	if !ok {
+		t.Fatalf("expected queueItemAddedMsg, got %T", msg)
+	}
+	if added.err == nil {
+		t.Fatal("expected error when queue service is nil")
+	}
+}
+
+func TestLoadPlaybackQueueCmdSuccess(t *testing.T) {
+	model, _, _ := newQueueTestModel(t)
+
+	msg := model.loadPlaybackQueueCmd()()
+	loaded, ok := msg.(playbackQueueLoadedMsg)
+	if !ok {
+		t.Fatalf("expected playbackQueueLoadedMsg, got %T", msg)
+	}
+	if loaded.err != nil {
+		t.Fatalf("expected no error, got %v", loaded.err)
+	}
+}
+
+func TestLoadPlaybackQueueCmdNilService(t *testing.T) {
+	model := newTestModel(t)
+	model.queueService = nil
+
+	msg := model.loadPlaybackQueueCmd()()
+	loaded, ok := msg.(playbackQueueLoadedMsg)
+	if !ok {
+		t.Fatalf("expected playbackQueueLoadedMsg, got %T", msg)
+	}
+	if loaded.err == nil {
+		t.Fatal("expected error when queue service is nil")
+	}
+}
+
+func TestNextTrackCmdEmptyQueue(t *testing.T) {
+	model, _, _ := newQueueTestModel(t)
+
+	msg := model.nextTrackCmd()()
+	changed, ok := msg.(queueTrackChangedMsg)
+	if !ok {
+		t.Fatalf("expected queueTrackChangedMsg, got %T", msg)
+	}
+	if changed.err == nil {
+		t.Fatal("expected error on empty queue")
+	}
+}
+
+func TestNextTrackCmdNilService(t *testing.T) {
+	model := newTestModel(t)
+	model.queueService = nil
+
+	msg := model.nextTrackCmd()()
+	changed, ok := msg.(queueTrackChangedMsg)
+	if !ok {
+		t.Fatalf("expected queueTrackChangedMsg, got %T", msg)
+	}
+	if changed.err == nil {
+		t.Fatal("expected error when queue service is nil")
+	}
+}
+
+func TestPrevTrackCmdEmptyQueue(t *testing.T) {
+	model, _, _ := newQueueTestModel(t)
+
+	msg := model.prevTrackCmd()()
+	changed, ok := msg.(queueTrackChangedMsg)
+	if !ok {
+		t.Fatalf("expected queueTrackChangedMsg, got %T", msg)
+	}
+	if changed.err == nil {
+		t.Fatal("expected error on empty queue")
+	}
+}
+
+func TestPrevTrackCmdNilService(t *testing.T) {
+	model := newTestModel(t)
+	model.queueService = nil
+
+	msg := model.prevTrackCmd()()
+	changed, ok := msg.(queueTrackChangedMsg)
+	if !ok {
+		t.Fatalf("expected queueTrackChangedMsg, got %T", msg)
+	}
+	if changed.err == nil {
+		t.Fatal("expected error when queue service is nil")
+	}
+}
+
+func TestCycleRepeatCmdSuccess(t *testing.T) {
+	model, _, _ := newQueueTestModel(t)
+
+	msg := model.cycleRepeatCmd()()
+	toggled, ok := msg.(repeatModeToggledMsg)
+	if !ok {
+		t.Fatalf("expected repeatModeToggledMsg, got %T", msg)
+	}
+	if toggled.err != nil {
+		t.Fatalf("expected no error, got %v", toggled.err)
+	}
+}
+
+func TestCycleRepeatCmdNilService(t *testing.T) {
+	model := newTestModel(t)
+	model.queueService = nil
+
+	msg := model.cycleRepeatCmd()()
+	toggled, ok := msg.(repeatModeToggledMsg)
+	if !ok {
+		t.Fatalf("expected repeatModeToggledMsg, got %T", msg)
+	}
+	if toggled.err == nil {
+		t.Fatal("expected error when queue service is nil")
+	}
+}
+
+func TestToggleShuffleCmdSuccess(t *testing.T) {
+	model, _, _ := newQueueTestModel(t)
+
+	msg := model.toggleShuffleCmd()()
+	toggled, ok := msg.(shuffleToggledMsg)
+	if !ok {
+		t.Fatalf("expected shuffleToggledMsg, got %T", msg)
+	}
+	if toggled.err != nil {
+		t.Fatalf("expected no error, got %v", toggled.err)
+	}
+}
+
+func TestToggleShuffleCmdNilService(t *testing.T) {
+	model := newTestModel(t)
+	model.queueService = nil
+
+	msg := model.toggleShuffleCmd()()
+	toggled, ok := msg.(shuffleToggledMsg)
+	if !ok {
+		t.Fatalf("expected shuffleToggledMsg, got %T", msg)
+	}
+	if toggled.err == nil {
+		t.Fatal("expected error when queue service is nil")
+	}
+}
+
+func TestRemoveFromQueueCmdNilService(t *testing.T) {
+	model := newTestModel(t)
+	model.queueService = nil
+
+	msg := model.removeFromQueueCmd(1)()
+	removed, ok := msg.(queueItemRemovedMsg)
+	if !ok {
+		t.Fatalf("expected queueItemRemovedMsg, got %T", msg)
+	}
+	if removed.err == nil {
+		t.Fatal("expected error when queue service is nil")
+	}
+}
+
+func TestRemoveFromQueueCmdNotFound(t *testing.T) {
+	model, _, _ := newQueueTestModel(t)
+
+	msg := model.removeFromQueueCmd(9999)()
+	removed, ok := msg.(queueItemRemovedMsg)
+	if !ok {
+		t.Fatalf("expected queueItemRemovedMsg, got %T", msg)
+	}
+	if removed.err == nil {
+		t.Fatal("expected error when removing non-existent item")
+	}
 }

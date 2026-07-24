@@ -96,6 +96,10 @@ func (m Model) renderContent() string {
 		return lipgloss.NewStyle().MaxHeight(max(m.bodyHeight, 1)).Render(m.renderSettingsPage())
 	}
 
+	if m.state == statePlaybackQueue {
+		return lipgloss.NewStyle().MaxHeight(max(m.bodyHeight, 1)).Render(m.renderPlaybackQueuePage())
+	}
+
 	if m.loadingLibrary && len(m.list.Items()) == 0 {
 		content := components.RenderLoading(m.theme, m.spin.View(), "Loading library…")
 		return lipgloss.NewStyle().MaxHeight(max(m.bodyHeight, 1)).Render(content)

@@ -148,3 +148,83 @@ func (m Model) setPlaybackSpeed(speed float64) tea.Cmd {
 		return playbackSpeedChangedMsg{speed: speed, err: err}
 	}
 }
+
+func (m Model) addToQueueCmd(episodeID int64) tea.Cmd {
+	return func() tea.Msg {
+		if m.queueService == nil {
+			return queueItemAddedMsg{err: fmt.Errorf("queue service is unavailable")}
+		}
+		err := m.queueService.AddToQueue(m.ctx, episodeID)
+		return queueItemAddedMsg{err: err}
+	}
+}
+
+func (m Model) addPlayNextCmd(episodeID int64) tea.Cmd {
+	return func() tea.Msg {
+		if m.queueService == nil {
+			return queueItemAddedMsg{err: fmt.Errorf("queue service is unavailable")}
+		}
+		err := m.queueService.AddPlayNext(m.ctx, episodeID)
+		return queueItemAddedMsg{err: err}
+	}
+}
+
+func (m Model) loadPlaybackQueueCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.queueService == nil {
+			return playbackQueueLoadedMsg{err: fmt.Errorf("queue service is unavailable")}
+		}
+		views, err := m.queueService.GetQueueWithEpisodes(m.ctx)
+		return playbackQueueLoadedMsg{views: views, err: err}
+	}
+}
+
+func (m Model) nextTrackCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.queueService == nil {
+			return queueTrackChangedMsg{err: fmt.Errorf("queue service is unavailable")}
+		}
+		err := m.queueService.Next(m.ctx)
+		return queueTrackChangedMsg{err: err}
+	}
+}
+
+func (m Model) prevTrackCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.queueService == nil {
+			return queueTrackChangedMsg{err: fmt.Errorf("queue service is unavailable")}
+		}
+		err := m.queueService.Previous(m.ctx)
+		return queueTrackChangedMsg{err: err}
+	}
+}
+
+func (m Model) cycleRepeatCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.queueService == nil {
+			return repeatModeToggledMsg{err: fmt.Errorf("queue service is unavailable")}
+		}
+		err := m.queueService.ToggleRepeat(m.ctx)
+		return repeatModeToggledMsg{err: err}
+	}
+}
+
+func (m Model) toggleShuffleCmd() tea.Cmd {
+	return func() tea.Msg {
+		if m.queueService == nil {
+			return shuffleToggledMsg{err: fmt.Errorf("queue service is unavailable")}
+		}
+		err := m.queueService.ToggleShuffle(m.ctx)
+		return shuffleToggledMsg{err: err}
+	}
+}
+
+func (m Model) removeFromQueueCmd(itemID int64) tea.Cmd {
+	return func() tea.Msg {
+		if m.queueService == nil {
+			return queueItemRemovedMsg{err: fmt.Errorf("queue service is unavailable")}
+		}
+		err := m.queueService.RemoveFromQueue(m.ctx, itemID)
+		return queueItemRemovedMsg{err: err}
+	}
+}

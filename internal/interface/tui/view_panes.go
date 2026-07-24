@@ -350,6 +350,32 @@ func (m Model) renderPlayerNotesContent(width int) string {
 	return m.theme.Body.Render(lipgloss.Wrap(description, wrapWidth, ""))
 }
 
+func (m Model) renderPlaybackQueuePage() string {
+	title := m.theme.SectionTitle.Render("Playback Queue")
+	subtitle := m.theme.MutedText.Render("Manage the playback queue. Press d to remove, n/p for next/prev track.")
+	panel := m.theme.PanelFocused
+
+	paneHeight := max(m.bodyHeight, 1)
+	header := lipgloss.JoinVertical(lipgloss.Left, title, subtitle)
+	innerHeight := max(paneHeight-panel.GetVerticalFrameSize()-lipgloss.Height(header), 1)
+
+	m.playbackQueueList.SetSize(max(m.contentWidth()-4, 20), innerHeight)
+	body := m.playbackQueueList.View()
+
+	if !m.playbackQueueLoaded {
+		body = m.theme.MutedText.Render("Loading queue...")
+	} else if len(m.playbackQueueList.Items()) == 0 {
+		body = m.theme.MutedText.Render(
+			"Queue is empty.\n\nPress 'e' on an episode to add it to the queue.",
+		)
+	}
+
+	return panel.Width(max(m.contentWidth()-4, 20)).
+		Height(paneHeight).
+		MaxHeight(paneHeight).
+		Render(lipgloss.JoinVertical(lipgloss.Left, header, body))
+}
+
 func (m Model) renderGuideContent(width int) string {
 	wrapWidth := max(width-4, 16)
 

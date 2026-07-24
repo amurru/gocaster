@@ -489,11 +489,39 @@ func (b *mprisBroadcaster) SetPosition(trackId string, position int64) *dbus.Err
 }
 
 func (b *mprisBroadcaster) Next() *dbus.Error {
-	return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{"Not supported"})
+	b.mu.Lock()
+	ctrl := b.controller
+	b.mu.Unlock()
+
+	if ctrl == nil {
+		return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{"no controller"})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := ctrl.Next(ctx); err != nil {
+		return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
+	}
+	return nil
 }
 
 func (b *mprisBroadcaster) Previous() *dbus.Error {
-	return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{"Not supported"})
+	b.mu.Lock()
+	ctrl := b.controller
+	b.mu.Unlock()
+
+	if ctrl == nil {
+		return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{"no controller"})
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := ctrl.Previous(ctx); err != nil {
+		return dbus.NewError("org.mpris.MediaPlayer2.Error", []any{err.Error()})
+	}
+	return nil
 }
 
 func (b *mprisBroadcaster) Introspect() string {

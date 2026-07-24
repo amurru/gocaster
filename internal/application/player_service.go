@@ -16,6 +16,7 @@ type PlayerService struct {
 	player      domain.Player
 	broadcaster domain.PlaybackBroadcaster
 	logger      domain.Logger
+	queueSvc    *QueueService
 
 	currentEpisode *domain.Episode
 	currentPodcast *domain.Podcast
@@ -26,7 +27,7 @@ type PlayerService struct {
 // uses — episode reads/writes and podcast reads (issue #17). The concrete
 // SQLiteRepo satisfies both via the union PodcastRepository, so the composition
 // root passes the same repo. logger defaults to NoopLogger when nil (issue #14).
-func NewPlayerService(episodes domain.EpisodeRepo, podcasts domain.PodcastRepo, player domain.Player, broadcaster domain.PlaybackBroadcaster, logger domain.Logger) *PlayerService {
+func NewPlayerService(episodes domain.EpisodeRepo, podcasts domain.PodcastRepo, player domain.Player, broadcaster domain.PlaybackBroadcaster, logger domain.Logger, queueSvc *QueueService) *PlayerService {
 	if logger == nil {
 		logger = domain.NoopLogger{}
 	}
@@ -36,6 +37,7 @@ func NewPlayerService(episodes domain.EpisodeRepo, podcasts domain.PodcastRepo, 
 		player:      player,
 		broadcaster: broadcaster,
 		logger:      logger,
+		queueSvc:    queueSvc,
 	}
 
 	if broadcaster != nil {
@@ -178,8 +180,8 @@ func (s *PlayerService) broadcastState(ctx context.Context) {
 
 	metadata := domain.PlaybackMetadata{
 		CanSeek:       status.CanSeek,
-		CanGoNext:     false,
-		CanGoPrevious: false,
+		CanGoNext:     s.queueSvc != nil && s.queueSvc.HasNext(),
+		CanGoPrevious: s.queueSvc != nil && s.queueSvc.HasPrevious(),
 	}
 
 	if episode != nil {
@@ -217,4 +219,50 @@ func (s *PlayerService) PlayPause(ctx context.Context) error {
 
 func (s *PlayerService) Stop(ctx context.Context) error {
 	return s.StopPlayback(ctx)
+}
+
+func (s *PlayerService) Next(ctx context.Context) error {
+	if s.queueSvc == nil {
+		return fmt.Errorf("queue not available")
+	}
+	if err := s.queueSvc.Next(ctx); err != nil {
+		return err
+	}
+	return s.syncFromQueue(ctx)
+}
+
+func (s *PlayerService) Previous(ctx context.Context) error {
+	if s.queueSvc == nil {
+		return fmt.Errorf("queue not available")
+	}
+	if err := s.queueSvc.Previous(ctx); err != nil {
+		return err
+	}
+	return s.syncFromQueue(ctx)
+}
+
+func (s *PlayerService) syncFromQueue(ctx context.Context) error {
+	epID := s.queueSvc.CurrentEpisodeID()
+	if epID == 0 {
+		return nil
+	}
+
+	episode, err := s.episodes.FindEpisodeByID(ctx, epID)
+	if err != nil {
+		return fmt.Errorf("find episode after queue navigation: %w", err)
+	}
+
+	podcast, err := s.podcasts.FindByID(ctx, episode.PodcastID)
+	if err != nil {
+		return fmt.Errorf("find podcast after queue navigation: %w", err)
+	}
+
+	s.mu.Lock()
+	s.currentEpisode = episode
+	s.currentPodcast = podcast
+	s.lastEpisodeID = epID
+	s.mu.Unlock()
+
+	s.broadcastState(ctx)
+	return nil
 }

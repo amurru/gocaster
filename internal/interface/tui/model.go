@@ -29,7 +29,8 @@ const (
 	statePlayerSeek  viewState = "player_seek"
 	stateHelp        viewState = "help"
 	stateDownloads   viewState = "downloads"
-	stateSettings    viewState = "settings"
+	stateSettings         viewState = "settings"
+	statePlaybackQueue    viewState = "playback_queue"
 
 	focusLibrary paneFocus = "library"
 	focusDetail  paneFocus = "detail"
@@ -131,6 +132,31 @@ type settingsPersistedMsg struct {
 	err      error
 }
 
+type playbackQueueLoadedMsg struct {
+	views []application.QueueItemView
+	err   error
+}
+
+type queueItemAddedMsg struct {
+	err error
+}
+
+type queueItemRemovedMsg struct {
+	err error
+}
+
+type queueTrackChangedMsg struct {
+	err error
+}
+
+type repeatModeToggledMsg struct {
+	err error
+}
+
+type shuffleToggledMsg struct {
+	err error
+}
+
 type Settings struct {
 	AutoSyncOnStartup bool
 	PeriodicSync      bool
@@ -141,9 +167,10 @@ type Settings struct {
 }
 
 type Model struct {
-	podcastService  *application.PodcastService
-	downloadService *application.DownloadService
-	playerService   *application.PlayerService
+	podcastService   *application.PodcastService
+	downloadService  *application.DownloadService
+	playerService    *application.PlayerService
+	queueService     *application.QueueService
 	// ctx is the application root context. It is cancelled on shutdown so every
 	// in-flight service call (and the downloads it parents) observes
 	// cancellation (issue #11). tea.Cmd closures capture it via the Model value
@@ -187,8 +214,11 @@ type Model struct {
 	sortOrder       episodeSortOrder
 	previousState   viewState
 
-	downloadJobs []application.DownloadJobView
-	queueList    list.Model
+	downloadJobs    []application.DownloadJobView
+	queueList       list.Model
+	playbackQueueList list.Model
+	queueViews        []application.QueueItemView
+	playbackQueueLoaded bool
 
 	playbackStatus     domain.PlaybackStatus
 	currentPodcast     *domain.Podcast
@@ -211,6 +241,7 @@ func NewModel(
 	svc *application.PodcastService,
 	dsvc *application.DownloadService,
 	psvc *application.PlayerService,
+	qsvc *application.QueueService,
 	settings Settings,
 	saveSettings func(Settings) error,
 	customThemesDir string,
@@ -307,10 +338,17 @@ func NewModel(
 	downloadQueueList.Title = "Downloads"
 	downloadQueueList.SetStatusBarItemName("download", "downloads")
 
+	pbqDelegate := components.NewPlaybackQueueDelegate(theme)
+	playbackQueueList := list.New([]list.Item{}, pbqDelegate, 0, 0)
+	playbackQueueList = configureListStyles(playbackQueueList, theme)
+	playbackQueueList.Title = "Queue"
+	playbackQueueList.SetStatusBarItemName("item", "items")
+
 	return Model{
 		podcastService:  svc,
 		downloadService: dsvc,
 		playerService:   psvc,
+		queueService:    qsvc,
 		ctx:             ctx,
 		state:           stateBrowse,
 		keys:            defaultKeyMap(),
@@ -318,8 +356,9 @@ func NewModel(
 		help:            helpModel,
 		list:            podcastList,
 		epList:          episodeList,
-		queueList:       downloadQueueList,
-		detail:          detailViewport,
+		queueList:          downloadQueueList,
+		playbackQueueList:  playbackQueueList,
+		detail:             detailViewport,
 		guide:           guideViewport,
 		playerNotes:     playerNotesViewport,
 		input:           input,

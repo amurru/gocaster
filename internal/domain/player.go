@@ -73,6 +73,8 @@ type PlaybackController interface {
 	Stop(ctx context.Context) error
 	SeekTo(ctx context.Context, positionSec float64) error
 	Status(ctx context.Context) (PlaybackStatus, error)
+	Next(ctx context.Context) error
+	Previous(ctx context.Context) error
 }
 
 // PlaybackBroadcaster fans playback state out to external surfaces (MPRIS,

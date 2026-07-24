@@ -979,10 +979,10 @@ func newTestModelWithRepo(t *testing.T, repo *persistence.SQLiteRepo) Model {
 	podcastService := application.NewPodcastService(repo, repo, repo, tuiMockFeedParser{}, nil)
 	downloadService := application.NewDownloadService(repo, repo, repo, repo, "downloads", nil)
 	mockPlayer := &tuiMockPlayer{}
-	playerService := application.NewPlayerService(repo, repo, mockPlayer, nil, nil)
+	playerService := application.NewPlayerService(repo, repo, mockPlayer, nil, nil, nil)
 	settings := Settings{PeriodicSyncMins: 60}
 	save := func(Settings) error { return nil }
-	return NewModel(context.Background(), podcastService, downloadService, playerService, settings, save, "")
+	return NewModel(context.Background(), podcastService, downloadService, playerService, nil, settings, save, "")
 }
 
 // ── Integration: seeded repo download lifecycle ─────────────────────

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/amurru/gocaster/internal/application"
 	"github.com/amurru/gocaster/internal/domain"
 	"github.com/amurru/gocaster/internal/interface/tui/styles"
 )
@@ -249,4 +250,32 @@ func (d DownloadJobItem) WithTheme(theme styles.Theme) DownloadJobItem {
 func (d DownloadJobItem) WithFlashTick(tick int64) DownloadJobItem {
 	d.FlashTick = tick
 	return d
+}
+
+// PlaybackQueueItem wraps a QueueItemView to satisfy the list.Item interface
+// for the playback queue list.
+type PlaybackQueueItem struct {
+	QueueItemView application.QueueItemView
+	Theme         styles.Theme
+}
+
+func (p PlaybackQueueItem) FilterValue() string {
+	return p.QueueItemView.EpisodeTitle
+}
+
+func (p PlaybackQueueItem) Title() string {
+	return p.QueueItemView.EpisodeTitle
+}
+
+func (p PlaybackQueueItem) Description() string {
+	parts := []string{p.QueueItemView.PodcastTitle}
+	if p.QueueItemView.IsCurrent {
+		parts = append(parts, "NOW PLAYING")
+	}
+	return strings.Join(parts, "  \u2022  ")
+}
+
+func (p PlaybackQueueItem) WithTheme(theme styles.Theme) PlaybackQueueItem {
+	p.Theme = theme
+	return p
 }

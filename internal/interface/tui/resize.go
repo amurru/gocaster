@@ -178,6 +178,12 @@ func (m *Model) openDownloadsQueue() {
 	m.setStatus("Download queue opened", "info")
 }
 
+func (m *Model) openPlaybackQueuePage() {
+	m.state = statePlaybackQueue
+	m.playbackQueueLoaded = false
+	m.setStatus("Playback queue opened", "info")
+}
+
 func (m *Model) openSettingsPage() {
 	m.state = stateSettings
 	m.settingsCursor = 0

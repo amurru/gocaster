@@ -136,7 +136,8 @@ func run() error {
 		}
 	}
 	broadcaster := system.NewCompositeBroadcaster(broadcasters...)
-	playerSvc := application.NewPlayerService(repo, repo, mpvPlayer, broadcaster, logger)
+	queueSvc := application.NewQueueService(repo, repo, repo, mpvPlayer, broadcaster, logger)
+	playerSvc := application.NewPlayerService(repo, repo, mpvPlayer, broadcaster, logger, queueSvc)
 
 	// Get custom themes directory
 	customThemesDir, err := config.GetCustomThemesDir()
@@ -163,7 +164,7 @@ func run() error {
 		cfg.ThemeName = next.ThemeName
 		return config.Save(cfg)
 	}
-	model := tui.NewModel(ctx, podcastSvc, downloadSvc, playerSvc, settings, saveSettings, customThemesDir)
+	model := tui.NewModel(ctx, podcastSvc, downloadSvc, playerSvc, queueSvc, settings, saveSettings, customThemesDir)
 
 	// tea.WithContext makes the program's event loop observe ctx: when the root
 	// context is cancelled (SIGINT/SIGTERM), the loop exits and p.Run()

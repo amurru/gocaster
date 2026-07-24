@@ -28,6 +28,14 @@ type keyMap struct {
 	Settings          key.Binding
 	SpeedDown         key.Binding
 	SpeedUp           key.Binding
+	AddToQueue        key.Binding
+	AddPlayNext       key.Binding
+	OpenQueue         key.Binding
+	NextTrack         key.Binding
+	PrevTrack         key.Binding
+	CycleRepeat       key.Binding
+	ToggleShuffle     key.Binding
+	DeleteQueueItem   key.Binding
 }
 
 func defaultKeyMap() keyMap {
@@ -132,6 +140,38 @@ func defaultKeyMap() keyMap {
 			key.WithKeys("]"),
 			key.WithHelp("]", "faster"),
 		),
+		AddToQueue: key.NewBinding(
+			key.WithKeys("e"),
+			key.WithHelp("e", "add to queue"),
+		),
+		AddPlayNext: key.NewBinding(
+			key.WithKeys("E"),
+			key.WithHelp("E", "play next"),
+		),
+		OpenQueue: key.NewBinding(
+			key.WithKeys("Q"),
+			key.WithHelp("Q", "queue"),
+		),
+		NextTrack: key.NewBinding(
+			key.WithKeys("n"),
+			key.WithHelp("n", "next track"),
+		),
+		PrevTrack: key.NewBinding(
+			key.WithKeys("p"),
+			key.WithHelp("p", "prev track"),
+		),
+		CycleRepeat: key.NewBinding(
+			key.WithKeys("x"),
+			key.WithHelp("x", "repeat"),
+		),
+		ToggleShuffle: key.NewBinding(
+			key.WithKeys("#"),
+			key.WithHelp("#", "shuffle"),
+		),
+		DeleteQueueItem: key.NewBinding(
+			key.WithKeys("d"),
+			key.WithHelp("d", "remove"),
+		),
 	}
 }
 
@@ -166,6 +206,8 @@ func (k keyMap) FooterShortcuts(state string, focus string) []key.Binding {
 		return []key.Binding{k.Close, k.Submit, k.ToggleHelp, k.Quit}
 	case "settings":
 		return []key.Binding{k.Close, k.Submit, k.Settings, k.ToggleHelp, k.Quit}
+	case "playback_queue":
+		return []key.Binding{k.Close, k.NextTrack, k.PrevTrack, k.CycleRepeat, k.ToggleShuffle, k.DeleteQueueItem, k.ToggleHelp, k.Quit}
 	default:
 		if focus == "detail" {
 			return []key.Binding{
