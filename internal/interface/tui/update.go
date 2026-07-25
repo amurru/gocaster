@@ -523,6 +523,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.fetchPlaybackStatus())
 		return m, tea.Batch(cmds...)
 
+	case playbackSpeedChangedMsg:
+		if msg.err != nil {
+			m.setStatus(fmt.Sprintf("Speed change failed: %v", msg.err), "error")
+		} else {
+			m.setStatus(fmt.Sprintf("Speed: %.1fx", msg.speed), "success")
+			cmds = append(cmds, m.fetchPlaybackStatus())
+		}
+		return m, tea.Batch(cmds...)
+
 	case playbackQueueLoadedMsg:
 		if msg.err != nil {
 			m.playbackQueueLoaded = true

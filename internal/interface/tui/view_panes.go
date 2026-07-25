@@ -302,6 +302,12 @@ func (m Model) renderPlayerPage() string {
 		m.playbackStatus.ProgressPct,
 		max(m.contentWidth()-12, 24),
 	)
+	speedLine := lipgloss.JoinHorizontal(
+		lipgloss.Left,
+		m.theme.Label.Render("Speed "),
+		m.theme.Body.Render(fmt.Sprintf("%.1fx", m.playbackStatus.Speed)),
+	)
+
 	controls := m.theme.Card.Width(max(m.contentWidth()-8, 20)).Render(strings.Join([]string{
 		lipgloss.JoinHorizontal(
 			lipgloss.Left,
@@ -323,6 +329,7 @@ func (m Model) renderPlayerPage() string {
 			m.theme.Label.Render("Progress "),
 			m.theme.Body.Render(progressLine),
 		),
+		speedLine,
 		progressBar,
 	}, "\n"))
 
