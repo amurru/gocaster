@@ -95,10 +95,16 @@ func NewPodcastService(
 // with all of its episodes in a single transaction (issue #13): all-or-nothing,
 // so a mid-loop failure leaves no partial episode set behind.
 func (s *PodcastService) AddPodcast(ctx context.Context, rssUrl string) (*domain.Podcast, error) {
-	podcast, episodes, _, err := s.fetcher.Parse(ctx, rssUrl, domain.FeedHeaders{})
+	podcast, episodes, headers, err := s.fetcher.Parse(ctx, rssUrl, domain.FeedHeaders{})
 	if err != nil {
 		return nil, err
 	}
+
+	// Persist the feed headers so subsequent refreshes can use conditional
+	// requests (If-None-Match / If-Modified-Since) to avoid re-downloading
+	// unchanged feeds.
+	podcast.ETag = headers.ETag
+	podcast.LastModified = headers.LastModified
 
 	if err := s.batch.SavePodcastWithEpisodes(ctx, podcast, episodes); err != nil {
 		return nil, err

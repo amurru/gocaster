@@ -159,7 +159,7 @@ func savePodcast(ctx context.Context, ex execer, podcast *domain.Podcast) error 
 }
 
 func (r *SQLiteRepo) FindAll(ctx context.Context) ([]domain.Podcast, error) {
-	query := `SELECT id, title, feed_url, description, image_url, last_updated, etag, last_modified FROM podcasts ORDER BY title`
+	query := `SELECT id, title, feed_url, description, image_url, last_updated, COALESCE(etag, ''), COALESCE(last_modified, '') FROM podcasts ORDER BY title`
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
@@ -180,7 +180,7 @@ func (r *SQLiteRepo) FindAll(ctx context.Context) ([]domain.Podcast, error) {
 }
 
 func (r *SQLiteRepo) FindByID(ctx context.Context, id int64) (*domain.Podcast, error) {
-	query := `SELECT id, title, feed_url, description, image_url, last_updated, etag, last_modified FROM podcasts WHERE id = ?`
+	query := `SELECT id, title, feed_url, description, image_url, last_updated, COALESCE(etag, ''), COALESCE(last_modified, '') FROM podcasts WHERE id = ?`
 	var p domain.Podcast
 	err := r.db.QueryRowContext(ctx, query, id).
 		Scan(&p.ID, &p.Title, &p.FeedURL, &p.Description, &p.ImageURL, &p.LastUpdated, &p.ETag, &p.LastModified)
@@ -328,7 +328,7 @@ func (r *SQLiteRepo) SaveDownloadJob(ctx context.Context, job *domain.DownloadJo
 }
 
 func (r *SQLiteRepo) FindDownloadJobByEpisodeID(ctx context.Context, episodeID int64) (*domain.DownloadJob, error) {
-	query := `SELECT id, episode_id, status, bytes_downloaded, bytes_total, temp_path, final_path, etag, last_modified, supports_resume, error_message, sha256, created_at, updated_at FROM downloads WHERE episode_id = ?`
+	query := `SELECT id, episode_id, status, bytes_downloaded, bytes_total, temp_path, final_path, COALESCE(etag, ''), COALESCE(last_modified, ''), supports_resume, error_message, sha256, created_at, updated_at FROM downloads WHERE episode_id = ?`
 	var j domain.DownloadJob
 	err := r.db.QueryRowContext(ctx, query, episodeID).
 		Scan(&j.ID, &j.EpisodeID, &j.Status, &j.BytesDownloaded, &j.BytesTotal, &j.TempPath, &j.FinalPath, &j.ETag, &j.LastModified, &j.SupportsResume, &j.ErrorMessage, &j.SHA256, &j.CreatedAt, &j.UpdatedAt)
@@ -342,7 +342,7 @@ func (r *SQLiteRepo) FindDownloadJobByEpisodeID(ctx context.Context, episodeID i
 // previous DownloadService.findJobByID helper, which called FindAllDownloadJobs
 // and iterated the whole table on every status update (issue #17 perf bug).
 func (r *SQLiteRepo) FindDownloadJobByID(ctx context.Context, id int64) (*domain.DownloadJob, error) {
-	query := `SELECT id, episode_id, status, bytes_downloaded, bytes_total, temp_path, final_path, etag, last_modified, supports_resume, error_message, sha256, created_at, updated_at FROM downloads WHERE id = ?`
+	query := `SELECT id, episode_id, status, bytes_downloaded, bytes_total, temp_path, final_path, COALESCE(etag, ''), COALESCE(last_modified, ''), supports_resume, error_message, sha256, created_at, updated_at FROM downloads WHERE id = ?`
 	var j domain.DownloadJob
 	err := r.db.QueryRowContext(ctx, query, id).
 		Scan(&j.ID, &j.EpisodeID, &j.Status, &j.BytesDownloaded, &j.BytesTotal, &j.TempPath, &j.FinalPath, &j.ETag, &j.LastModified, &j.SupportsResume, &j.ErrorMessage, &j.SHA256, &j.CreatedAt, &j.UpdatedAt)
@@ -353,7 +353,7 @@ func (r *SQLiteRepo) FindDownloadJobByID(ctx context.Context, id int64) (*domain
 }
 
 func (r *SQLiteRepo) FindAllDownloadJobs(ctx context.Context) ([]domain.DownloadJob, error) {
-	query := `SELECT id, episode_id, status, bytes_downloaded, bytes_total, temp_path, final_path, etag, last_modified, supports_resume, error_message, sha256, created_at, updated_at FROM downloads ORDER BY updated_at DESC`
+	query := `SELECT id, episode_id, status, bytes_downloaded, bytes_total, temp_path, final_path, COALESCE(etag, ''), COALESCE(last_modified, ''), supports_resume, error_message, sha256, created_at, updated_at FROM downloads ORDER BY updated_at DESC`
 	rows, err := r.db.QueryContext(ctx, query)
 	if err != nil {
 		return nil, err
