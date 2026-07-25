@@ -10,8 +10,10 @@ require (
 	github.com/gen2brain/go-mpv v0.2.3
 	github.com/godbus/dbus/v5 v5.2.2
 	github.com/hugolgst/rich-go v0.0.0-20240715122152-74618cc1ace2
+	github.com/k3a/html2text v1.4.0
 	github.com/mattn/go-sqlite3 v1.14.42
 	github.com/mmcdole/gofeed v1.3.0
+	golang.org/x/sync v0.20.0
 )
 
 require (
@@ -28,7 +30,6 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/ebitengine/purego v0.7.1 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/k3a/html2text v1.4.0 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-runewidth v0.0.23 // indirect
 	github.com/mmcdole/goxpp v1.1.1-0.20240225020742-a0c311522b23 // indirect
@@ -38,9 +39,8 @@ require (
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sahilm/fuzzy v0.1.1 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
-	golang.org/x/net v0.4.0 // indirect
-	golang.org/x/sync v0.20.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
-	golang.org/x/text v0.5.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	gopkg.in/natefinch/npipe.v2 v2.0.0-20160621034901-c1b8fa8bdcce // indirect
 )
