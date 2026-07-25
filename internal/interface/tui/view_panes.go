@@ -194,7 +194,12 @@ func (m Model) renderDetailContent(availableHeight int) string {
 		description = "No description available."
 	}
 
-	descriptionWrapped := m.theme.Body.Render(lipgloss.Wrap(description, wrapWidth, ""))
+	descText, err := html.ConvertToText(description)
+	if err != nil || strings.TrimSpace(descText) == "" {
+		descText = "No description available."
+	}
+
+	descriptionWrapped := m.theme.Body.Render(lipgloss.Wrap(descText, wrapWidth, ""))
 	descLines := lipgloss.Height(descriptionWrapped)
 
 	episodesHeading := m.theme.SectionTitle.Render("Recent Episodes")
@@ -348,7 +353,11 @@ func (m Model) renderPlayerNotesContent(width int) string {
 	if description == "" {
 		return ""
 	}
-	return m.theme.Body.Render(lipgloss.Wrap(description, wrapWidth, ""))
+	content, err := html.ConvertToText(description)
+	if err != nil || strings.TrimSpace(content) == "" {
+		return m.theme.MutedText.Render("No episode notes available.")
+	}
+	return m.theme.Body.Render(lipgloss.Wrap(content, wrapWidth, ""))
 }
 
 func (m Model) renderPlaybackQueuePage() string {
